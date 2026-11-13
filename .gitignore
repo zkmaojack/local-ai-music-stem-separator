@@ -1,0 +1,10 @@
+.venv/
+.runtime/
+.model-cache/
+.pytest_cache/
+__pycache__/
+*.egg-info/
+/build/
+/output/
+/koi is love.flac
+/dd-groove.ogg

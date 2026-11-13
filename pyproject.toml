@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-stem-separator"
+version = "0.1.0"
+description = "Offline music source separation with Demucs"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "demucs==4.0.1",
+    "beartype>=0.20,<1",
+    "rotary-embedding-torch>=0.8,<1",
+    "imageio-ffmpeg==0.6.0",
+    "numpy==2.4.6",
+    "soundfile==0.13.1",
+    "torch==2.11.0",
+    "torchaudio==2.11.0",
+    "torchlibrosa==0.1.0",
+    "transformers>=4.50,<5",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6-Essentials>=6.8,<7", "sounddevice>=0.5,<0.6"]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+stem-separator = "stem_separator.cli:main"
+
+[project.gui-scripts]
+stem-separator-gui = "stem_separator.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"stem_separator.backends.roformer" = ["LICENSE"]
+"stem_separator.backends.audiosep" = ["LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
