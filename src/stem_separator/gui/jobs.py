@@ -5,7 +5,6 @@ import sys
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QRunnable, QTemporaryDir, QThreadPool, QTimer, Signal
 
-
 class SeparationJob(QObject):
     event = Signal(dict)
     finished = Signal(bool)

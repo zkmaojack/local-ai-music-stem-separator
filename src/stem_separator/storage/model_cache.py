@@ -7,8 +7,8 @@ from tempfile import NamedTemporaryFile
 from typing import BinaryIO
 from urllib.request import urlopen
 
-from stem_separator.application.instruments import EFFECT_PROMPTS, HEAD_IDS
-from stem_separator.application.types import SeparationError
+from stem_separator.application.instruments import EFFECT_PROMPTS, HEAD_IDS, REMAINDER, uses_four_stems
+from stem_separator.application.types import ModelChoice, Quality, SeparationError
 
 CHECKPOINT_NAME = "955717e8-8726e21a.th"
 CHECKPOINT_SHA256 = "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4"
@@ -40,6 +40,37 @@ AUDIOSEP_VOCAB = ModelAsset("vocab.json", ROBERTA_SOURCE + "/vocab.json",
                             "9e7f63c2d15d666b52e21d250d2e513b87c9b713cfa6987a82ed89e5e6e50655")
 AUDIOSEP_MERGES = ModelAsset("merges.txt", ROBERTA_SOURCE + "/merges.txt",
                              "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5")
+
+YAMNET = ModelAsset(
+    "yamnet.tflite", "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite",
+    "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
+)
+SUBROFORMER_SOURCE = "https://huggingface.co/archimickey/SubRoformer/resolve/daeffbe5a4f5e4dc8ac0bb7f68d3a6f7e0088c40"
+SUBROFORMER_CONFIG = ModelAsset(
+    "sbroformer_base_4stem.yaml", SUBROFORMER_SOURCE + "/configs/sbroformer_base_4stem.yaml",
+    "f0523d18524f97d71071a33097d186b25becb5ddf87ebc11c1fa27135db6bc57",
+)
+SUBROFORMER_WEIGHTS = ModelAsset(
+    "subroformer_base_4stem_1400000_ema_fp16.safetensors",
+    SUBROFORMER_SOURCE + "/checkpoints/subroformer_base_4stem_1400000_ema_fp16.safetensors?download=true",
+    "1cdcafa9fd84a0a78df71b159c8896040a57d1ab5d6c783154c078952521ad0b",
+)
+SUBROFORMER_TUNED_CONFIG = ModelAsset(
+    "sbroformer_base_4stem_silu.yaml", SUBROFORMER_SOURCE + "/configs/sbroformer_base_4stem_silu.yaml",
+    "e8bb0c9b0327e3f30452bc5038b7b5392a6ff7336deb737be91092cc5463505d",
+)
+SUBROFORMER_TUNED_WEIGHTS = ModelAsset(
+    "subroformer_base_4stem_1400000_ema_perceptual_finetuned_200000_fp16.safetensors",
+    SUBROFORMER_SOURCE + "/checkpoints/subroformer_base_4stem_1400000_ema_perceptual_finetuned_200000_fp16.safetensors?download=true",
+    "c0ac06e4a16ce7e765ea6622b7d58bfa58957a03cab0fc42b15387a399c6c177",
+)
+CLAP_SOURCE = "https://huggingface.co/laion/clap-htsat-unfused/resolve/8fa0f1c6d0433df6e97c127f64b2a1d6c0dcda8a"
+CLAP_ASSETS = tuple(ModelAsset(name, f"{CLAP_SOURCE}/{name}?download=true", digest) for name, digest in (
+    ("config.json", "9efb9557bc804f2ca6e394486af2e45dfed0b18554909735a99c6220b84e4288"),
+    ("preprocessor_config.json", "9739f58296aa6f9ac18008fd0150fb2649bc554985fbde86d0a4041c882ac753"),
+    ("tokenizer.json", "77ef92283d67f0d97e1454909a964afcbfa2019f0fb9f18f8e88d5c25c3ba729"),
+    ("pytorch_model.bin", "1cd3c601bc4afe0fa87be3de4c13dd2cfadd249fac1e29acf74a9b296c3219bb"),
+))
 
 
 class ModelCache:
@@ -111,9 +142,33 @@ def effect_assets(root: Path) -> tuple[ModelCache, ...]:
     return tuple(ModelCache(root / "audiosep", asset) for asset in (AUDIOSEP_WEIGHTS, AUDIOSEP_VOCAB, AUDIOSEP_MERGES))
 
 
-def assets_for_targets(root: Path, targets: tuple[str, ...]) -> tuple[ModelCache, ...]:
-    if not targets:
-        return model_assets(root, False)
+def recognition_assets(root: Path, quality: Quality) -> tuple[ModelCache, ...]:
+    basic = (ModelCache(root / "recognition", YAMNET),)
+    if quality == "high":
+        return basic + tuple(ModelCache(root / "recognition" / "clap", asset) for asset in CLAP_ASSETS)
+    return basic
+
+
+def subroformer_assets(root: Path, tuned: bool = False) -> tuple[ModelCache, ModelCache]:
+    config, weights = (SUBROFORMER_TUNED_CONFIG, SUBROFORMER_TUNED_WEIGHTS) if tuned else (SUBROFORMER_CONFIG, SUBROFORMER_WEIGHTS)
+    return ModelCache(root / "subroformer", config), ModelCache(root / "subroformer", weights)
+
+
+def assets_for_targets(root: Path, targets: tuple[str, ...], quality: Quality | None = None,
+                       model: ModelChoice = "auto") -> tuple[ModelCache, ...]:
+    if targets == (REMAINDER,):
+        return ()
+    if uses_standard_model(targets, quality, model):
+        if model == "demucs" or (model == "auto" and quality in (None, "fast")):
+            return model_assets(root, False)
+        assets = subroformer_assets(root)
+        return assets + subroformer_assets(root, tuned=True) if quality == "high" else assets
     instruments = model_assets(root, True) if any(name in HEAD_IDS for name in targets) else ()
     effects = effect_assets(root) if any(name in EFFECT_PROMPTS for name in targets) else ()
     return instruments + effects
+
+
+def uses_standard_model(targets: tuple[str, ...], quality: Quality | None, model: ModelChoice) -> bool:
+    return model in ("demucs", "subroformer") or (
+        model == "auto" and (not targets or (quality is not None and uses_four_stems(targets)))
+    )

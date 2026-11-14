@@ -1,9 +1,14 @@
 from dataclasses import dataclass
 
-from stem_separator.application.types import SeparationError
+from stem_separator.application.types import ModelChoice, SeparationError
 
 STANDARD = ("vocals", "drums", "bass", "other")
 REMAINDER = "remainder"
+FOUR_STEM_TARGETS = {"vocal": "vocals", "drums": "drums", "bass": "bass"}
+
+
+def uses_four_stems(targets: tuple[str, ...]) -> bool:
+    return FOUR_STEM_TARGETS.keys() >= set(targets)
 
 
 @dataclass(frozen=True)
@@ -111,3 +116,13 @@ def validate_selection(targets: tuple[str, ...]) -> None:
         if overlap:
             name = LABELS[min(overlap, key=HEAD_IDS.__getitem__)]
             raise SeparationError(f"「{LABELS[target]}」包含「{name}」，请选择其中一种。")
+
+
+def validate_model_selection(targets: tuple[str, ...], model: ModelChoice) -> None:
+    if targets == (REMAINDER,):
+        return
+    validate_selection(targets)
+    if model in ("demucs", "subroformer") and not uses_four_stems(targets):
+        raise SeparationError("此模型支持人声、鼓和贝斯。请选择其他模型以分离细分乐器或音效。")
+    if model == "detailed" and not targets:
+        raise SeparationError("请选择至少一件乐器或音效，或使用自动识别。")

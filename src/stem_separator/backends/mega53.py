@@ -6,7 +6,7 @@ import torch
 import yaml
 
 from stem_separator.application.instruments import HEAD_IDS, REMAINDER, validate_selection
-from stem_separator.application.types import Device, Progress, ProgressCallback, SeparationError
+from stem_separator.application.types import Device, Progress, ProgressCallback, Quality, SeparationError
 from stem_separator.backends.base import Audio, InferenceResult, ModelSpec
 from stem_separator.backends.demucs import device_label, resolve_device
 from stem_separator.backends.roformer.bs_roformer import BSRoformer
@@ -14,10 +14,14 @@ from stem_separator.storage.model_cache import ModelCache
 
 RATE = 44100
 MAX_HEADS_PER_PASS = 8
+ORCHESTRAL_TARGETS = frozenset({
+    "bowed_strings", "strings", "violin", "viola", "cello", "double-bass", "harp", "wind", "woodwind", "brass",
+    "flute", "clarinet", "oboe", "bassoon", "saxophone", "french-horn", "trumpet", "trombone", "tuba", "timpani",
+})
 
 
 class Mega53Backend:
-    def __init__(self, config: ModelCache, weights: ModelCache, targets: tuple[str, ...]) -> None:
+    def __init__(self, config: ModelCache, weights: ModelCache, targets: tuple[str, ...], *, quality: Quality = "balanced") -> None:
         validate_selection(targets)
         if not targets:
             raise SeparationError("请选择至少一种乐器。")
@@ -25,6 +29,8 @@ class Mega53Backend:
         self.targets = targets
         self.config = config
         self.weights = weights
+        self.quality = quality
+        self.orchestral = bool(ORCHESTRAL_TARGETS.intersection(targets))
         self.model: BSRoformer | None = None
         self.cuda_device: torch.device | None = None
 
@@ -80,9 +86,9 @@ class Mega53Backend:
                 actual = torch.device("cpu")
                 model.to(actual)
                 torch.cuda.empty_cache()
-                stems = self._infer(audio, actual, 3, progress)
+                stems = self._infer(audio, actual, self._cpu_seconds(), progress)
         else:
-            stems = self._infer(audio, actual, 3, progress)
+            stems = self._infer(audio, actual, self._cpu_seconds(), progress)
         remainder = audio.copy()
         for samples in stems.values():
             np.subtract(remainder, samples, out=remainder)
@@ -90,7 +96,13 @@ class Mega53Backend:
         return InferenceResult(stems, device_label(actual), perf_counter() - start, allocated, reserved)
 
     def _cuda(self, audio: Audio, device: torch.device, progress: ProgressCallback) -> dict[str, Audio] | None:
-        for seconds in (6, 3, 1.5):
+        if self.quality == "fast":
+            sizes = (1.5,)
+        elif self.orchestral:
+            sizes = (3, 1.5)
+        else:
+            sizes = (6, 3, 1.5)
+        for seconds in sizes:
             try:
                 return self._infer(audio, device, seconds, progress)
             except torch.cuda.OutOfMemoryError:
@@ -98,6 +110,9 @@ class Mega53Backend:
             torch.cuda.empty_cache()
             progress(Progress("device", "显存不足，正在缩短分块。"))
         return None
+
+    def _cpu_seconds(self) -> float:
+        return 1.5 if self.quality == "fast" else 3
 
     def _infer(self, audio: Audio, device: torch.device, seconds: float,
                progress: ProgressCallback) -> dict[str, Audio]:
@@ -115,7 +130,7 @@ class Mega53Backend:
         groups = [list(range(index, min(index + MAX_HEADS_PER_PASS, len(self.targets))))
                   for index in range(0, len(self.targets), MAX_HEADS_PER_PASS)]
         chunk = round(seconds * RATE)
-        hop = chunk * 3 // 4
+        hop = chunk // 2 if self.quality == "high" else chunk * 3 // 4
         frames = audio.shape[-1]
         blocks = 1 + (max(0, frames - chunk) + hop - 1) // hop
         offsets = range(0, blocks * hop, hop)

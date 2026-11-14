@@ -2,7 +2,16 @@
 
 在 Windows 本机分离音乐和电子音效。支持 CUDA 和 CPU，可通过桌面界面或命令行使用。输入支持 WAV、MP3、FLAC，M4A 和 Ogg 也可通过 FFmpeg 解码。
 
-## 在 Windows 上安装
+## Windows 安装包
+
+1. 从 [GitHub Releases](https://github.com/zkmaojack/local-ai-music-stem-separator/releases/latest) 下载 `StemSeparator-0.2.0-windows-x64-setup.exe`，可用同页的 `SHA256SUMS.txt` 核对文件。
+2. 运行安装器，可更改安装位置。默认按当前用户安装。兼容 NVIDIA 驱动的电脑可选 CUDA 12.8，其余电脑选择 CPU。
+3. 安装阶段联网下载运行环境和依赖。勾选「准备全部本地模型」可同时下载并校验模型，需要数 GB 磁盘空间。也可以在安装后把已有的 `.model-cache` 复制到应用的安装目录。
+4. 从开始菜单打开 **Local AI Music Stem Separator**。模型准备完毕后，导入、识别、分离和导出均在本机离线运行。
+
+在 Windows「已安装的应用」中可卸载程序。卸载保留安装目录下的模型缓存及用户已导出的文件。
+
+## 从源码安装
 
 1. 安装 64 位 [Python 3.11](https://www.python.org/downloads/windows/)。在 GitHub 仓库页面点击 **Code → Download ZIP**，解压后在包含 `pyproject.toml` 的目录打开 PowerShell。已安装 Git 的用户也可以克隆仓库。
 
@@ -27,21 +36,23 @@
    .\.venv\Scripts\python.exe -m pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
    ```
 
-4. 安装桌面依赖，然后启动应用。
+4. 安装桌面依赖并准备本地模型，然后启动应用。
 
    ```powershell
    .\.venv\Scripts\python.exe -m pip install -e '.[gui]'
+   .\.venv\Scripts\stem-separator.exe setup-model --all
    .\.venv\Scripts\stem-separator-gui.exe
    ```
 
-安装依赖和首次下载模型需要联网。安装完成后，可直接运行项目目录下的 `.venv\Scripts\stem-separator-gui.exe`。如要从命令行和桌面界面共享模型，请在项目目录中执行下面的 `setup-model`，让两者使用同一个 `.model-cache`。
+安装依赖和显式准备模型时需要联网。日常使用可直接在项目目录启动 `.venv\Scripts\stem-separator-gui.exe`，识别、分离和导出均在本机完成。
 
 ## 分离并保存第一首歌
 
 1. 将一首歌拖入窗口，或点击「选择歌曲」。可使用自己的音频，也可下载 Kevin MacLeod 的《DD Groove》试用。打开页面上的 **Original file**，将文件保存为 `dd-groove.ogg`。 [下载样本](https://commons.wikimedia.org/wiki/File:Kevin_MacLeod_-_04_-_DD_Groove.ogg) · [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)
-2. 点击「开始分离」。默认得到人声、鼓、贝斯和其他四条音轨。首次使用时，按窗口提示下载标准模型，约 80 MB。模型就绪后即可离线分离。
-3. 点击播放键试听。点击波形或拖动进度条可跳转，用「静音」或「独听」检查各轨。
-4. 点击「保存音轨」，勾选想导出的音轨并选择文件夹。应用会在目标位置创建以歌曲命名的文件夹，遇到同名时自动加序号。导出格式为 44.1 kHz、24-bit 立体声 WAV。试听中的静音和独听只影响播放。
+2. 在「分离设置」选择模型、质量，以及自动识别、手动选轨或标准四轨，然后点击「开始分离」。处理视图会显示原始波形、频带摘要和任务进度。换歌也会打开同一个设置窗口，成功后替换上一首的音轨。
+3. 点击播放键试听。将鼠标移到波形上可查看精确时间，点击波形或拖动进度条可跳转。扬声器键切换静音，耳机键独听该轨。再次按下耳机键会恢复原来的混音设置。
+4. 在「音轨」菜单勾选要显示的行，也可以一次显示或隐藏全部。显隐只影响列表，试听音量和导出选择各自独立。
+5. 点击「保存音轨」，勾选想导出的音轨并选择文件夹。应用会在目标位置创建以歌曲命名的文件夹，遇到同名时自动加序号。导出为 24-bit 立体声 WAV。SubRoformer 使用 48 kHz，其他分离路径使用 44.1 kHz。
 
 换歌或退出时会清理临时分离结果与试听数据。通过「保存音轨」导出的文件会留在所选目录。异常退出留下的音频缓存会在下次启动时清理。
 
@@ -51,7 +62,23 @@
 
 自选模式标为实验性。混音中相近乐器可能串音，缺席乐器也可能有输出。不同录音中同种乐器的多个声部通常会出现在同一条轨里。音效模型按菜单顺序从剩余混音提取，两个音效声部重叠时，先提取的声部可能带走后续音效的一部分。
 
-首次使用自选模式时按提示下载对应权重，扩展乐器约 1.27 GB，电子音效约 0.9 GB。分离音频和试听均在本地完成。大量音轨会增加临时磁盘占用，分离阶段的系统内存也随曲目长度和选轨数量增长。
+自选模式需要本地对应权重。扩展乐器约 1.27 GB，电子音效约 0.9 GB。大量音轨会增加临时磁盘占用，分离阶段的系统内存也随曲目长度和选轨数量增长。
+
+## 分离质量
+
+| 档位 | 适用场景 | 处理方式 |
+| --- | --- | --- |
+| 快速 | CPU 或显存较少的电脑 | YAMNet 识别，标准声部用 Demucs，细分乐器用较短分块。 |
+| 均衡 | 日常使用，默认 | 标准声部用单个 SubRoformer，细分乐器用 Mega 53。已缓存的 CLAP 可补充复核 YAMNet 候选。 |
+| 高质量 | 愿意花更长时间处理 | 继续使用本地复核。标准声部先后运行两个 SubRoformer 权重并融合，细分乐器采用更密集的分块交叠。 |
+
+YAMNet 权重约 4 MB，CLAP 约 615 MB，SubRoformer 每份权重约 207 MB。更换档位后，点击「重新分离」可应用到当前歌曲。没有高置信度候选时，可以通过「选择乐器」手动补选。正式分离的耗时还取决于曲目长度、音轨数和设备。
+
+## 离线模型
+
+应用在本地运行 YAMNet。均衡和高质量会在 CLAP 文件齐备时复核低置信度的乐器，即使 YAMNet 已识别到部分音轨。缺少 CLAP 时使用 YAMNet，待确认项可在「选择乐器」中查看。
+
+可以在联网电脑上执行 `setup-model --all`，再把整个 `.model-cache` 目录复制到离线电脑的项目目录。命令会逐个校验模型的 SHA-256。也可通过 `--model-dir <目录>` 指定已经存放模型的目录。
 
 ## 命令行用法
 
@@ -79,11 +106,26 @@
 
 ## 常见问题
 
-- **首次分离提示准备模型**。在桌面窗口点击「下载模型」，或用命令行的 `setup-model` 预先下载标准模型。命令行默认使用当前目录下的 `.model-cache`。桌面版优先使用当前目录中已存在的 `.model-cache`，否则使用用户本地应用数据目录。两者都接受 `--model-dir <目录>`，命令行需将此选项放在子命令之前。
+- **缺少本地模型**。桌面提示会列出缺失文件的完整路径。将所需模型复制到对应目录后重试。命令行默认使用当前目录下的 `.model-cache`。桌面版优先使用当前目录中已存在的 `.model-cache`，否则使用用户本地应用数据目录。使用命令行指定模型目录时，请将 `--model-dir <目录>` 放在子命令之前。
 - **CUDA 不可用**。运行 `doctor` 检查显卡、FFmpeg 和标准模型。默认模式会在没有可用 CUDA 时使用 CPU。
 - **音轨有串音**。相近音色、混响或重叠音效可能分到同一轨，自选模式尤其容易出现这种情况。用「独听」确认再导出。
 
 ## 验证
+
+Windows 安装器源码位于 `installer`。构建需要 Windows x64、项目的 Python 环境和带许可证文件的 uv Python 包。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --target .runtime\uv uv==0.13.8
+.\installer\build.ps1
+```
+
+构建产物和 SHA-256 校验文件位于 `build/release`。
+
+可复现 AudioSep 分块接缝、导出与试听混音的幅度检查。下面的命令使用本地模型和《koi is love》前 24 秒，在新目录写入诊断 JSON 和比较用 WAV。短时响度用 3 秒未加权 RMS 表示。
+
+```powershell
+.\.venv\Scripts\python.exe tools/diagnose_stems.py '.\koi is love.flac' --effect whoosh --output .\output\audio-diagnostics
+```
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e '.[gui,test]'
@@ -111,3 +153,4 @@ Windows 11，Python 3.11.18，PyTorch 2.11.0 `cu128`，RTX 5060 Laptop GPU，NVI
 - PyTorch 和 TorchAudio 使用 BSD-3-Clause。SoundFile 使用 BSD-3-Clause，其 Windows 安装包包含 LGPL 的 libsndfile。本机使用的 `imageio-ffmpeg` Windows 安装包内 FFmpeg 为 GPL v3 或更新版本。后续 Windows 打包时应核对选定二进制、CUDA 运行库及全部依赖的再分发条款。 [PyTorch](https://github.com/pytorch/pytorch/blob/main/LICENSE) · [TorchAudio](https://github.com/pytorch/audio/blob/main/LICENSE) · [SoundFile](https://github.com/bastibe/python-soundfile) · [FFmpeg 法律说明](https://ffmpeg.org/legal.html)
 - 桌面界面使用 PySide6 Essentials，播放使用 sounddevice 和 PortAudio。 [Qt for Python 授权](https://doc.qt.io/qtforpython-6/licenses.html) · [sounddevice 许可证](https://github.com/spatialaudio/python-sounddevice/blob/master/LICENSE) · [PortAudio 许可证](https://www.portaudio.com/license.html)
 - 扩展乐器使用 ZFTurbo 发布的 MVSep Mega 53 v1.0.21，推理源码及该发布的权重采用 MIT。电子音效使用 Audio-AGI 的 MIT AudioSep 推理源码，权重来自其文档链接的 Apache-2.0 模型卡，分词使用 RoBERTa 的 MIT 文件。权重和配置均校验 SHA-256。 [MVSep 发布](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.21) · [MVSep 权重授权](https://github.com/ZFTurbo/Music-Source-Separation-Training/issues/245) · [AudioSep 源码](https://github.com/Audio-AGI/AudioSep) · [AudioSep 模型卡](https://huggingface.co/nielsr/audiosep-demo) · [RoBERTa](https://huggingface.co/FacebookAI/roberta-base)
+- 自动识别使用 YAMNet 和 LAION CLAP。均衡和高质量档的标准声部可使用 ArchiMickey 的 SubRoformer，采用上游提交 `bf4e35aff7905c8cd43b8d7365ffd1bcc7d1df02` 的 PyTorch 推理模型源码，所附 MIT 许可证位于源码目录。 [YAMNet](https://github.com/tensorflow/models/tree/master/research/audioset/yamnet) · [CLAP 权重](https://huggingface.co/laion/clap-htsat-unfused) · [SubRoformer](https://github.com/ArchiMickey/SubRoformer)

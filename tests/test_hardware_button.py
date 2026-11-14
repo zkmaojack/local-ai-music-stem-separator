@@ -36,3 +36,24 @@ def test_hardware_key_resets_after_release_outside_and_toggles_by_keyboard(monke
     QTest.qWait(190)
     assert not key.isChecked() and key._travel == 0
     key.close()
+
+
+def test_speaker_transitions_without_delaying_toggle_and_releases_the_cap(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    key = HardwareButton("", glyph="speaker", compact=True)
+    key.setCheckable(True)
+    key.show()
+    app.processEvents()
+    states = []
+    key.toggled.connect(states.append)
+    QTest.keyClick(key, Qt.Key.Key_Space)
+    assert states == [True]
+    assert key._speaker_motion.isRunning() if hasattr(key._speaker_motion, "isRunning") else key._mute_amount < 1
+    QTest.qWait(180)
+    assert key._mute_amount == 1 and key._travel == 0
+    QTest.keyClick(key, Qt.Key.Key_Space)
+    assert states == [True, False]
+    QTest.qWait(190)
+    assert key._mute_amount == 0 and key._travel == 0
+    key.close()

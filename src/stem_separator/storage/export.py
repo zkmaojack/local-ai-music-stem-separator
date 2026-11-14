@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from shutil import copyfile
@@ -40,13 +40,16 @@ def copy_stems(destination: Path, selected: list[Path]) -> Path:
 
 
 def export_stems(
-    destination: Path, stems: dict[str, Audio], spec: ModelSpec, frames: int
+    destination: Path, stems: dict[str, Audio], spec: ModelSpec, frames: int,
+    *, check_cancel: Callable[[], None] | None = None,
 ) -> tuple[dict[str, Path], float]:
     check_destination(destination)
     if set(stems) != set(spec.stems):
         raise SeparationError("The model returned an unexpected set of stems.")
     peak = 0.0
     for name, samples in stems.items():
+        if check_cancel is not None:
+            check_cancel()
         if samples.shape != (spec.channels, frames) or not np.isfinite(samples).all():
             raise SeparationError(f"The {name} stem has an invalid shape or non-finite samples.")
         peak = max(peak, float(samples.max()), -float(samples.min()))
@@ -54,6 +57,10 @@ def export_stems(
 
     with _stage_export(destination) as staging:
         for name in spec.stems:
+            if check_cancel is not None:
+                check_cancel()
             samples = stems[name] if gain == 1.0 else stems[name] * gain
             sf.write(staging / f"{name}.wav", samples.T, spec.sample_rate, subtype="PCM_24")
+        if check_cancel is not None:
+            check_cancel()
     return {name: destination / f"{name}.wav" for name in spec.stems}, gain

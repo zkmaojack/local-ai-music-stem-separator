@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 from stem_separator.application.instruments import INSTRUMENTS, LABELS, validate_selection
 from stem_separator.application.types import SeparationError
 from stem_separator.gui.hardware import HardwareButton
+from stem_separator.gui.theme import SPACE
 
 PRIORITY = ("vocal", "drums", "bass", "guitar", "piano", "violin", "viola", "cello", "flute", "clarinet", "french-horn",
             "synth", "digital-piano", "riser", "impact", "whoosh", "kick", "snare", "hh", "toms")
@@ -15,24 +16,27 @@ PRIORITY = ("vocal", "drums", "bass", "guitar", "piano", "violin", "viola", "cel
 class InstrumentMenu(QFrame):
     applied = Signal(tuple)
 
-    def __init__(self, anchor: QWidget, selection: tuple[str, ...]) -> None:
+    def __init__(self, anchor: QWidget, selection: tuple[str, ...], uncertain: tuple[str, ...] = (),
+                 *, show_standard: bool = True) -> None:
         super().__init__(anchor, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setObjectName("instruments")
         self.setAccessibleName("选择乐器")
         self.anchor = anchor
         self.category = "常用"
+        self.uncertain = frozenset(uncertain)
         self.setFixedWidth(315)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 13, 14, 13)
-        layout.setSpacing(8)
+        layout.setContentsMargins(3 * SPACE, 3 * SPACE, 3 * SPACE, 3 * SPACE)
+        layout.setSpacing(2 * SPACE)
         self.search = QLineEdit(placeholderText="搜索乐器", accessibleName="搜索乐器")
         self.search.textChanged.connect(self._filter)
         layout.addWidget(self.search)
         tabs = QHBoxLayout()
-        tabs.setSpacing(5)
+        tabs.setSpacing(SPACE)
         self.group = QButtonGroup(self)
-        for category in ("常用", "古典", "电子"):
+        categories = ("待确认", "常用", "古典", "电子") if uncertain else ("常用", "古典", "电子")
+        for category in categories:
             key = QPushButton(category, objectName="utility")
             key.setCheckable(True)
             self.group.addButton(key)
@@ -66,17 +70,22 @@ class InstrumentMenu(QFrame):
         self.summary.setMinimumHeight(34)
         layout.addWidget(self.summary)
         buttons = QHBoxLayout()
-        standard = QPushButton("标准四轨", objectName="utility")
-        standard.clicked.connect(lambda: self._apply(()))
+        self.show_standard = show_standard
         self.apply_button = HardwareButton("应用", primary=True, width=104)
         self.apply_button.clicked.connect(lambda: self._apply(self.selection))
-        buttons.addWidget(standard)
+        self.search.returnPressed.connect(self.apply_button.click)
+        if show_standard:
+            standard = QPushButton("标准四轨", objectName="utility")
+            standard.clicked.connect(lambda: self._apply(()))
+            buttons.addWidget(standard)
         buttons.addStretch()
         buttons.addWidget(self.apply_button)
         layout.addLayout(buttons)
         self._filter()
         self._update_selection()
-        if selection:
+        if uncertain:
+            self._switch("待确认")
+        elif selection:
             self._switch(next(item.category for item in INSTRUMENTS if item.id == selection[0]))
 
     @property
@@ -107,7 +116,12 @@ class InstrumentMenu(QFrame):
         self.caption.setText("搜索结果 · 实验性" if query else f"{self.category} · 实验性")
         count = 0
         for item, checkbox in self.options:
-            visible = query in f"{item.label} {item.id}" if query else item.category == self.category
+            if query:
+                visible = query in f"{item.label} {item.id}"
+            elif self.category == "待确认":
+                visible = item.id in self.uncertain
+            else:
+                visible = item.category == self.category
             checkbox.setVisible(visible)
             count += visible
         self.no_matches.setVisible(not count)
@@ -120,7 +134,8 @@ class InstrumentMenu(QFrame):
             self.summary.setText(str(error))
             self.apply_button.setEnabled(False)
             return
-        self.summary.setText(f"已选 {len(selected)} 项" if selected else "当前使用标准四轨")
+        self.summary.setText(f"已选 {len(selected)} 项" if selected else
+                             "当前使用标准四轨" if self.show_standard else "请选择要分离的乐器")
         self.summary.setToolTip("、".join(LABELS[name] for name in selected))
         self.apply_button.setEnabled(bool(selected))
 

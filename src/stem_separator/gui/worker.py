@@ -5,9 +5,9 @@ import json
 import os
 from pathlib import Path
 import sys
+from typing import cast
 
-from stem_separator.application.types import Progress, SeparationRequest
-from stem_separator.storage.model_cache import assets_for_targets
+from stem_separator.application.types import MODEL_LABELS, ModelChoice, Progress, QUALITY_LABELS, Quality, SeparationRequest
 
 
 class Cancelled(Exception):
@@ -19,8 +19,13 @@ def emit(event: str, **fields: object) -> None:
 
 
 def main() -> int:
-    action, model_dir, *paths = sys.argv[1:]
-    targets = tuple(paths[2:]) if action == "separate" else tuple(paths)
+    os.environ.update(
+        HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1", DO_NOT_TRACK="1",
+    )
+    action, model_dir, quality_name, *paths = sys.argv[1:]
+    if quality_name not in QUALITY_LABELS:
+        return 2
+    quality = cast(Quality, quality_name)
     root = Path(model_dir)
     cancel_path = os.environ.get("STEM_SEPARATOR_CANCEL_FILE")
     marker = Path(cancel_path) if cancel_path else None
@@ -35,21 +40,30 @@ def main() -> int:
 
     try:
         check_cancel()
-        if action == "setup":
-            for asset in assets_for_targets(root, targets):
-                progress(Progress("download", asset.path.name))
-                asset.download(lambda done, total: progress(Progress("download", asset.path.name, done, total)))
-            emit("ready")
-        else:
+        if action == "recognize":
+            from stem_separator.application.recognition import recognize
+
+            result = recognize(Path(paths[0]), root, quality, progress, check_cancel)
+            check_cancel()
+            emit("result", targets=result.tracks, uncertain=result.uncertain)
+        elif action == "separate":
             from stem_separator.application.separation import SeparationService
             from stem_separator.backends.selection import build_backend
             source, output_root = map(Path, paths[:2])
-            service = SeparationService(build_backend(root, targets))
-            result = service.run(SeparationRequest(source, output_root), progress)
+            if paths[3] not in MODEL_LABELS:
+                return 2
+            model = cast(ModelChoice, paths[3])
+            service = SeparationService(build_backend(root, tuple(paths[4:]), quality, model))
+            result = service.run(SeparationRequest(source, output_root), progress,
+                                 filter_empty=paths[2] == "automatic", include_signal=paths[2] == "manual",
+                                 check_cancel=check_cancel)
             check_cancel()
-            emit("result", paths={name: str(path) for name, path in result.paths.items()},
+            emit("result", tracks=list(result.paths), paths={name: str(path) for name, path in result.paths.items()},
                  device=result.device, frames=result.frames, sample_rate=result.sample_rate,
-                 elapsed_seconds=result.elapsed_seconds, peak_bytes=result.cuda_peak_allocated_bytes)
+                 elapsed_seconds=result.elapsed_seconds, inference_seconds=result.inference_seconds,
+                 peak_bytes=result.cuda_peak_allocated_bytes)
+        else:
+            return 2
     except Cancelled:
         return 130
     except Exception as error:

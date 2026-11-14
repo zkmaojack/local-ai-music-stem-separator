@@ -4,6 +4,13 @@ from pathlib import Path
 from typing import Literal
 
 Device = Literal["auto", "cuda", "cpu"]
+Quality = Literal["fast", "balanced", "high"]
+QUALITY_LABELS = {"fast": "快速", "balanced": "均衡", "high": "高质量"}
+ModelChoice = Literal["auto", "demucs", "subroformer", "detailed"]
+MODEL_LABELS = {
+    "auto": "自动选择模型", "demucs": "Demucs", "subroformer": "SubRoformer",
+    "detailed": "Mega 53 / AudioSep",
+}
 
 
 class SeparationError(Exception):
@@ -16,6 +23,10 @@ class Progress:
     message: str
     completed: int | None = None
     total: int | None = None
+    model: str | None = None
+    signal: dict[str, list[float]] | None = None
+    duration: float | None = None
+    device: str | None = None
 
 
 ProgressCallback = Callable[[Progress], None]

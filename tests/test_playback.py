@@ -36,6 +36,22 @@ def test_preview_mixes_tracks_at_a_shared_cursor_after_seek() -> None:
     assert player.position == 8
 
 
+def test_live_gain_switch_ramps_across_short_audio_callbacks() -> None:
+    source = np.ones((40, 2), dtype=np.float32)
+    player = StemPlayer(Preview((source,), (), 1000))
+    player._playing = True
+    player.gains = (0.,)
+    out = np.empty((3, 2), dtype=np.float32)
+    time_info = SimpleNamespace(outputBufferDacTime=0.)
+    for expected in ((.875, .75, .625), (.5, .375, .25), (.125, 0., 0.), (0., 0., 0.)):
+        player._mix(out, len(out), time_info, None)
+        np.testing.assert_allclose(out, np.repeat(np.array(expected)[:, None], 2, axis=1))
+    player.gains = (.8,)
+    player._mix(out, len(out), time_info, None)
+    np.testing.assert_allclose(out[:, 0], (.1, .2, .3), atol=1e-6)
+    np.testing.assert_array_equal(source, 1.)
+
+
 def test_preview_maps_aligned_audio_and_releases_files(tmp_path: Path) -> None:
     track = tmp_path / "track.wav"
     samples = np.zeros((5003, 2), dtype=np.float32)
@@ -47,7 +63,14 @@ def test_preview_maps_aligned_audio_and_releases_files(tmp_path: Path) -> None:
         assert isinstance(preview.samples[0], np.memmap)
         assert preview.frames == len(samples)
         np.testing.assert_array_equal(preview.samples[0], samples)
-        assert preview.waveforms[0][-1] == pytest.approx(0.75)
+        shape = preview.waveforms[0]
+        assert shape.high[-1, 1] == pytest.approx(0.75)
+        assert shape.high[:, 0].max() == 0
+        assert shape.rms[-1, 1] == pytest.approx(0.75)
+        x, low, high, rms = shape.columns(12)
+        assert 0 < x[0] < x[-1] < 1
+        assert low.min() == 0 and high[-1] == pytest.approx(.75)
+        assert rms[-1] == pytest.approx(.75 / np.sqrt(2 * (shape.frames - (len(shape.low) * 11 // 12) * shape.stride)))
     finally:
         preview.close()
     (cache / "0.f32").unlink()

@@ -17,10 +17,11 @@ OVERLAP = 0.25
 class DemucsBackend:
     spec = ModelSpec("htdemucs", 44100, 2, ("vocals", "drums", "bass", "other"))
 
-    def __init__(self, cache: ModelCache) -> None:
+    def __init__(self, cache: ModelCache, *, compact: bool = False) -> None:
         self._cache = cache
         self._model: HTDemucs | None = None
         self._used_cuda = False
+        self._compact = compact
 
     def load(self) -> None:
         with self._cache.open_checkpoint() as checkpoint:
@@ -34,6 +35,8 @@ class DemucsBackend:
             or model.audio_channels != self.spec.channels
         ):
             raise SeparationError("The checkpoint does not match the htdemucs four-stem model.")
+        if self._compact:
+            model.segment = min(4.0, float(model.segment))
         self._model = model.eval()
 
     def unload(self) -> None:
