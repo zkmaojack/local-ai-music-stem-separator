@@ -55,7 +55,7 @@ def test_clap_reviews_a_partial_yamnet_result(tmp_path, monkeypatch) -> None:
 
     def refine(_audio, yamnet, _families, _weak, _assets, _cancel, _progress):
         assert yamnet == {"vocal": pytest.approx(.8)}
-        return {"flute": .75}, ("oboe",)
+        return {"flute": .75}, ("oboe",), ()
 
     monkeypatch.setattr(interpreter, "Interpreter", StubInterpreter)
     monkeypatch.setattr(recognition, "recognition_assets", lambda *_: (asset, asset))
@@ -100,7 +100,9 @@ def test_import_starts_separation_and_visibility_does_not_change_mix(tmp_path, m
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.setattr(gui, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(gui, "assets_for_targets", lambda *args: ())
-    monkeypatch.setattr(gui, "recognition_assets", lambda *args: ())
+    (tmp_path / "subroformer").mkdir()
+    for asset in assets_for_targets(tmp_path, (), "balanced", "auto"):
+        asset.path.touch()
     application = QApplication.instance() or QApplication([])
     track = tmp_path / "track.wav"
     sf.write(track, np.zeros((441, 2), dtype=np.float32), 44100)
@@ -113,7 +115,7 @@ def test_import_starts_separation_and_visibility_does_not_change_mix(tmp_path, m
         window.job_result = {"targets": ["vocal", "drums"]}
         window._on_finished(True)
         assert starts[-1][0] == "separate"
-        assert starts[-1][-4:] == ("automatic", "auto", "vocal", "drums")
+        assert starts[-1][-2:] == ("automatic", "auto")
 
         window.paths = {"vocal": track, "drums": track}
         window.result_targets = window.targets

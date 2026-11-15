@@ -35,8 +35,6 @@ BEVEL = "#f4f1ea"
 PANEL_BORDER = "#aaa79c"
 PANEL_TOP = "#e9e6de"
 PANEL_BOTTOM = "#dedbd3"
-SCREEN_TOP = "#383b38"
-SCREEN_LIP = "#aca99f"
 SCROLL_THUMB = "#737972"
 SELECTION = "#414945"
 HOVER = "#d4d1c8"
@@ -51,7 +49,7 @@ KEY_PRESSED = (70, 77, 74)
 KEY_DISABLED = (191, 192, 182)
 KEY_DISABLED_INK = "#626661"
 KEY_SKIRT = "#9a968a"
-KEY_TRAVEL = 1.8
+KEY_TRAVEL = 2.8
 TOOLBAR_KEY_HEIGHT = 50
 TRACK_KEY_SIZE = 44
 
@@ -94,12 +92,7 @@ def matte_tile() -> QPixmap:
 
 STYLE = """
 QWidget { color: @ink; }
-QFrame#deck, QFrame#songPanel {
-    background: qlineargradient(x1:0,y1:0,x2:0.25,y2:1,stop:0 @panelTop,stop:1 @panelBottom);
-    border: 1px solid @panelBorder; border-top-color: @bevel; border-radius: @radius;
-}
-QFrame#well, QScrollArea#display { background: @screen; border: 2px solid @screenEdge;
-    border-top-color: @screenTop; border-bottom-color: @screenLip; border-radius: @radius; }
+QScrollArea#display { background: @screen; border: 0; }
 QFrame#well QLabel#stateTitle { color: @displayText; }
 QFrame#well QLabel#muted { color: @waveform; }
 QWidget#trackPanel { background: @screen; }
@@ -116,12 +109,10 @@ QLabel#notice[severity="error"], QLabel[severity="error"] { color: @error; font-
 QLabel#importIcon { background: #d2d0c7; border: 1px solid #afaea5;
     border-bottom-color: #e8e5de; border-radius: 6px; color: #303531; font-size: 28px; }
 QFrame#rule { background: @screenEdge; }
-QProgressBar { min-height: 5px; max-height: 5px; background: @screenSecondary; border: 1px solid @screenEdge;
-    border-radius: 2px; }
-QProgressBar::chunk { background: @accent; border-radius: 2px; }
 QDialog, QFrame#instruments, QWidget#instrumentOptions, QWidget#menuPanel { background: @control; }
 QMenu, QFrame#instruments {
-    background: @control; border: 1px solid @edge; border-top-color: @bevel;
+    background: qlineargradient(x1:0,y1:0,x2:0.55,y2:1,stop:0 @panelTop,stop:1 @panelBottom);
+    border: 1px solid @edge; border-top-color: @bevel; border-left-color: @raised;
     border-bottom: 2px solid @edge; border-radius: @radius; padding: 5px;
 }
 QMenu::item { min-height: 24px; padding: 4px 30px 4px 26px; border-radius: 3px; }
@@ -142,15 +133,17 @@ QComboBox QAbstractItemView, QListView, QTreeView {
 QTreeView::item, QListView::item { min-height: 24px; }
 QHeaderView::section { background: @control; color: @muted; border: 0; border-bottom: 1px solid @edge; padding: 6px; }
 QPushButton#utility, QDialogButtonBox QPushButton, QToolButton {
-    min-height: 28px; padding: 0 8px; background: @raised; border: 1px solid @edge;
-    border-top-color: @bevel; border-bottom-width: 2px; border-radius: 4px;
+    min-height: 28px; padding: 0 8px;
+    background: qlineargradient(x1:0,y1:0,x2:0.3,y2:1,stop:0 @button,stop:1 @panelBottom);
+    border: 1px solid @edge; border-top-color: @bevel; border-left-color: @raised;
+    border-bottom-width: 3px; border-radius: 5px;
 }
 QPushButton#utility:hover, QDialogButtonBox QPushButton:hover, QToolButton:hover, QCheckBox:hover, QRadioButton:hover {
     background: @hover;
 }
 QPushButton#utility:checked, QToolButton:checked, QPushButton#utility:pressed,
 QDialogButtonBox QPushButton:pressed, QToolButton:pressed {
-    color: @button; background: @selection; border-color: @selection; padding-top: 1px;
+    color: @button; background: @selection; border-color: @selection; padding-top: 2px;
 }
 QPushButton#utility:focus, QToolButton:focus, QCheckBox:focus, QRadioButton:focus { outline: 1px dashed @selection; }
 QPushButton#utility:disabled, QDialogButtonBox QPushButton:disabled, QToolButton:disabled,
@@ -169,7 +162,7 @@ for token, value in {
     "error": ERROR, "accent": ACCENT, "edge": EDGE, "bevel": BEVEL, "radius": f"{RADIUS}px",
     "selection": SELECTION, "button": BUTTON_FACE, "disabled": DISABLED, "raised": RAISED, "hover": HOVER,
     "panelBorder": PANEL_BORDER, "panelTop": PANEL_TOP, "panelBottom": PANEL_BOTTOM,
-    "screenTop": SCREEN_TOP, "screenLip": SCREEN_LIP, "scrollThumb": SCROLL_THUMB,
+    "scrollThumb": SCROLL_THUMB,
 }.items():
     STYLE = STYLE.replace(f"@{token}", value)
 

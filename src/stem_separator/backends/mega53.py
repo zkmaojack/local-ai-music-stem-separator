@@ -146,7 +146,7 @@ class Mega53Backend:
         total = len(groups) * len(offsets)
         done = 0
         label = device_label(device)
-        progress(Progress("inference", label, done, total))
+        progress(Progress("inference", label, done, total, model=self.spec.name, device=label))
         with torch.inference_mode():
             for ids in groups:
                 for index in ids:
@@ -163,7 +163,7 @@ class Mega53Backend:
                             target = output[self.targets[index]][:, offset:offset + count]
                             target += estimate * taper[:count]
                         done += 1
-                        progress(Progress("inference", label, done, total))
+                        progress(Progress("inference", label, done, total, model=self.spec.name, device=label))
                 finally:
                     if cuda:
                         for index in ids:

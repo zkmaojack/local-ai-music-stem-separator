@@ -79,10 +79,10 @@ def test_cancelling_finalization_releases_preview_and_cache(tmp_path, monkeypatc
         window.phase = "preview"
         window._set_busy(True)
         window._show_stage(Stage.FINALIZING)
-        assert window.signal_display.timer.isActive()
+        assert window.progress.isVisible()
 
         window._cancel()
-        assert not window.signal_display.timer.isActive()
+        assert not window.progress.isVisible()
         with pytest.raises(InterruptedError):
             window._check_preview_cancel()
         window._preview_loaded(preview, "")

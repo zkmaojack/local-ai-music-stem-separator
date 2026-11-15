@@ -1,8 +1,50 @@
-from PySide6.QtCore import QFileInfo, QPoint, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QDialog, QFileDialog, QFileIconProvider, QMenu, QProxyStyle, QStyle, QWidget
+from PySide6.QtCore import QPoint, QRectF, Qt
+from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
+from PySide6.QtWidgets import QDialog, QFrame, QMenu, QProxyStyle, QStyle, QWidget
 
-from stem_separator.gui.theme import BUTTON_FACE, DISABLED, EDGE, MUTED, RAISED, SELECTION
+from stem_separator.gui.theme import (
+    BEVEL, BUTTON_FACE, DISABLED, EDGE, PANEL_BOTTOM, PANEL_TOP, RAISED,
+    SCREEN, SCREEN_EDGE, SELECTION,
+)
+
+
+class HardwarePanel(QFrame):
+    """One upper-left light source for the chassis seams and display opening."""
+
+    def __init__(self, *, recessed: bool = False, objectName: str = "") -> None:
+        super().__init__(objectName=objectName)
+        self.recessed = recessed
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bounds = QRectF(self.rect()).adjusted(1, 1, -1, -2)
+        edge = QLinearGradient(bounds.topLeft(), bounds.bottomRight())
+        edge.setColorAt(0, QColor(EDGE if self.recessed else BEVEL))
+        edge.setColorAt(1, QColor(BEVEL if self.recessed else EDGE))
+        p.setPen(QPen(edge, 1.2))
+        face = QLinearGradient(bounds.topLeft(), bounds.bottomRight())
+        face.setColorAt(0, QColor(SCREEN_EDGE if self.recessed else PANEL_TOP))
+        face.setColorAt(1, QColor(SCREEN if self.recessed else PANEL_BOTTOM))
+        p.setBrush(face)
+        p.drawRoundedRect(bounds, 10, 10)
+        if self.recessed:
+            opening = bounds.adjusted(3, 3, -3, -3)
+            p.setPen(QPen(QColor("#101212"), 1))
+            p.setBrush(QColor(SCREEN))
+            p.drawRoundedRect(opening, 7, 7)
+            # Shadow remains within the bezel, leaving the waveform unobscured.
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            for inset, alpha in ((1, 45), (2, 24), (3, 10)):
+                shade = QLinearGradient(opening.topLeft(), opening.bottomRight())
+                shade.setColorAt(0, QColor(0, 0, 0, alpha))
+                shade.setColorAt(1, QColor(0, 0, 0, 0))
+                p.setPen(QPen(shade, 1))
+                p.drawRoundedRect(opening.adjusted(inset, inset, -inset, -inset), 6, 6)
+        else:
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(255, 255, 255, 45), 1))
+            p.drawRoundedRect(bounds.adjusted(1.2, 1.2, -1.2, -1.2), 9, 9)
 
 
 class DeviceStyle(QProxyStyle):
@@ -72,60 +114,3 @@ class DeviceDialog(QDialog):
     def __init__(self, parent: QWidget, title: str) -> None:
         super().__init__(parent, windowTitle=title)
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
-
-
-class DeviceFileIcons(QFileIconProvider):
-    def __init__(self) -> None:
-        super().__init__()
-        self.icons = {shape: self._make_icon(shape) for shape in ("file", "folder", "drive")}
-
-    def icon(self, item) -> QIcon:
-        if isinstance(item, QFileInfo):
-            shape = "drive" if item.isRoot() else "folder" if item.isDir() else "file"
-        elif item == self.IconType.File:
-            shape = "file"
-        elif item == self.IconType.Folder:
-            shape = "folder"
-        else:
-            shape = "drive"
-        return self.icons[shape]
-
-    @staticmethod
-    def _make_icon(shape: str) -> QIcon:
-        tile = QPixmap(32, 32)
-        tile.setDevicePixelRatio(2)
-        tile.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(tile)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(MUTED), 1.15))
-        if shape == "folder":
-            painter.drawRoundedRect(1, 4, 14, 9, 1, 1)
-            painter.drawLine(2, 4, 7, 4)
-            painter.drawLine(2, 8, 14, 8)
-        elif shape == "file":
-            painter.drawRoundedRect(4, 2, 8, 12, 1, 1)
-            painter.drawLine(6, 6, 10, 6)
-            painter.drawLine(6, 9, 10, 9)
-        else:
-            painter.drawRoundedRect(1, 5, 14, 7, 1, 1)
-            painter.drawPoint(12, 9)
-        painter.end()
-        return QIcon(tile)
-
-
-class DeviceFileDialog(QFileDialog):
-    def __init__(self, parent: QWidget, title: str, directory: str, filters: str = "") -> None:
-        super().__init__(parent)
-        self.setOption(QFileDialog.Option.DontUseNativeDialog)
-        self.setOption(QFileDialog.Option.DontUseCustomDirectoryIcons)
-        self.setSupportedSchemes(["file"])
-        self._file_icons = DeviceFileIcons()
-        self.setIconProvider(self._file_icons)
-        self.setWindowTitle(title)
-        self.setLabelText(QFileDialog.DialogLabel.LookIn, "位置")
-        self.setLabelText(QFileDialog.DialogLabel.FileType, "文件类型")
-        if directory:
-            self.setDirectory(directory)
-        if filters:
-            self.setNameFilter(filters)
-        self.setMinimumSize(620, 420)

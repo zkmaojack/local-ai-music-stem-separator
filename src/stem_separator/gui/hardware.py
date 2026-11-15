@@ -5,7 +5,7 @@ from math import ceil
 
 import numpy as np
 from PySide6.QtCore import QEvent, QEasingCurve, QPointF, QRectF, Qt, QVariantAnimation
-from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QStyle
 
 from stem_separator.gui.theme import (
@@ -32,7 +32,10 @@ def _surface(width: int, height: int, scale: float, radius: float, shoulder: flo
     edge = np.clip(1 + distance / shoulder, 0, 1)
     slope = edge**1.6
     directional = nx * LIGHT_X + ny * LIGHT_Y
-    light = relief * slope * directional - 3 * y / height
+    # A broad shoulder carries the curvature; a narrow rim catches the light.
+    rim = np.exp(-((distance + .65) / .65) ** 2)
+    crown = 2.2 * (1 - np.clip((x / width) ** 2 + (y / height) ** 2, 0, 1))
+    light = relief * slope * directional + 9 * rim * directional + crown - 4 * y / height
     grain = np.random.default_rng(9).normal(0, 1.05, (ph, pw))
     rgb = np.asarray(tone) + (light + grain)[..., None]
     pixels = np.empty((ph, pw, 4), dtype=np.uint8)
@@ -180,30 +183,35 @@ class HardwareButton(QPushButton):
         p.setPen(Qt.PenStyle.NoPen)
         checked_face = self.isChecked() and self.glyph != "headphones" and self.monitor_muted is None
         dpr = self.devicePixelRatioF()
-        cap_width, cap_height = self.width() - 6, self.height() - 8
+        cap_width, cap_height = self.width() - 8, self.height() - 11
         radius = RADIUS if not self.compact else RADIUS - 1
         cap = QRectF(0, 0, cap_width, cap_height)
-        cap.moveTopLeft(QPointF(3, 2 + KEY_TRAVEL * self._travel))
+        cap.moveTopLeft(QPointF(4, 2 + KEY_TRAVEL * self._travel))
 
         clearance = 1 - self._travel
         for spread, alpha in CONTACT_SHADOW:
             contact = cap.adjusted(-spread, -0.3, spread, spread)
-            contact.translate(0.25 + 0.65 * clearance, 0.65 + 1.7 * clearance)
+            contact.translate(0.25 + 0.65 * clearance, 1.2 + 3.0 * clearance)
             p.setBrush(QColor(28, 27, 23, round(alpha * (0.43 + 0.57 * clearance))))
             p.drawRoundedRect(contact, radius + spread / 2, radius + spread / 2)
-        skirt = 0.65 + 1.8 * clearance
-        p.setBrush(QColor(SELECTION if checked_face else KEY_SKIRT))
-        p.drawRoundedRect(cap.translated(0.35, skirt), radius, radius)
+        skirt = .8 + 3.2 * clearance
+        side = QLinearGradient(cap.topLeft(), cap.bottomRight() + QPointF(0, skirt))
+        side_tone = QColor(SELECTION if checked_face else KEY_SKIRT)
+        side.setColorAt(0, side_tone.lighter(114))
+        side.setColorAt(.85, side_tone)
+        side.setColorAt(1, side_tone.darker(112))
+        p.setBrush(side)
+        p.drawRoundedRect(cap.adjusted(.2, 1, .2, skirt), radius, radius)
 
         tone = KEY_PRIMARY if self.primary else KEY_CAP
-        relief = 23 + 5 * (self.underMouse() and self.isEnabled()) - round(9 * self._travel)
+        relief = 30 + 4 * (self.underMouse() and self.isEnabled()) - round(8 * self._travel)
         if checked_face:
             tone = KEY_PRESSED
         if not self.isEnabled():
             tone = KEY_DISABLED
             relief = 12
             p.setOpacity(.68)
-        face = _surface(cap_width, cap_height, dpr, radius, 2.5, tone, relief)
+        face = _surface(cap_width, cap_height, dpr, radius, 4.2, tone, relief)
         p.drawPixmap(cap.topLeft(), face)
         if self.hasFocus() and self._focus_visible:
             p.setBrush(Qt.BrushStyle.NoBrush)

@@ -137,7 +137,7 @@ class EffectsBackend:
         total = len(offsets) * len(self.targets)
         done = 0
         label = device_label(device)
-        progress(Progress("inference", label, done, total))
+        progress(Progress("inference", label, done, total, model=self.spec.name, device=label))
         output = {}
         for index, name in enumerate(self.targets):
             mix = resample(remaining, EXPORT_RATE, MODEL_RATE)
@@ -151,7 +151,7 @@ class EffectsBackend:
                     estimate = model({"mixture": part, "condition": condition})["waveform"]
                 stitch_effect_chunk(extracted, estimate[:, 0], offset, body, context, fade_in)
                 done += 1
-                progress(Progress("inference", label, done, total))
+                progress(Progress("inference", label, done, total, model=self.spec.name, device=label))
             upsampled = resample(extracted, MODEL_RATE, EXPORT_RATE)[:, :audio.shape[-1]]
             output[name] = upsampled.numpy()
             remaining -= upsampled

@@ -9,6 +9,11 @@ from stem_separator.application.types import SeparationError
 from stem_separator.backends.base import Audio
 
 
+def has_signal(audio: Audio) -> bool:
+    """Ignore numerical silence without requiring a loud peak or whole-song RMS."""
+    return bool(audio.size and max(float(audio.max()), -float(audio.min())) > 2e-6)
+
+
 def decode_audio(
     source: Path, sample_rate: int, channels: int, ffmpeg: str | None = None,
     *, check_cancel: Callable[[], None] | None = None,
@@ -59,23 +64,3 @@ def decode_audio(
     if not np.isfinite(audio).all():
         raise SeparationError(f"Input contains non-finite audio samples: {source.name}")
     return audio
-
-
-def signal_profile(audio: Audio, sample_rate: int) -> dict[str, list[float]]:
-    """Summarize the imported mix once for the processing display."""
-    channel = audio if audio.ndim == 1 else audio[0]
-    count = min(128, len(channel))
-    boundaries = np.linspace(0, len(channel), count + 1, dtype=int)[:-1]
-    peaks = np.maximum.reduceat(np.abs(channel), boundaries)
-    width = min(2048, len(channel))
-    starts = np.linspace(0, len(channel) - width, 8, dtype=int)
-    window = np.hanning(width)
-    blocks = np.stack([channel[start:start + width] for start in starts])
-    magnitude = np.abs(np.fft.rfft(blocks * window)).mean(axis=0)
-    frequency = np.fft.rfftfreq(width, d=1 / sample_rate)
-    edges = np.geomspace(45, min(15000, sample_rate / 2), 37)
-    bands = [float(magnitude[(frequency >= low) & (frequency < high)].max(initial=0))
-             for low, high in zip(edges[:-1], edges[1:], strict=True)]
-    maximum = max(bands, default=0)
-    return {"wave": np.round(peaks / max(float(peaks.max(initial=0)), .05), 3).tolist(),
-            "bands": [round((value / maximum) ** .4, 3) if maximum else 0. for value in bands]}

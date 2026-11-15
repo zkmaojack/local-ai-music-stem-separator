@@ -45,6 +45,11 @@ YAMNET = ModelAsset(
     "yamnet.tflite", "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite",
     "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
 )
+PASST_OPENMIC = ModelAsset(
+    "openmic-passt-s-f128-10sec-p16-s10-ap.85.pt",
+    "https://github.com/kkoutini/PaSST/releases/download/v0.0.5/openmic-passt-s-f128-10sec-p16-s10-ap.85.pt",
+    "dc229428753176e8be0373d25887116fc15b490af86f671cecf9ed76a0f287da",
+)
 SUBROFORMER_SOURCE = "https://huggingface.co/archimickey/SubRoformer/resolve/daeffbe5a4f5e4dc8ac0bb7f68d3a6f7e0088c40"
 SUBROFORMER_CONFIG = ModelAsset(
     "sbroformer_base_4stem.yaml", SUBROFORMER_SOURCE + "/configs/sbroformer_base_4stem.yaml",
@@ -147,6 +152,10 @@ def recognition_assets(root: Path, quality: Quality) -> tuple[ModelCache, ...]:
     if quality == "high":
         return basic + tuple(ModelCache(root / "recognition" / "clap", asset) for asset in CLAP_ASSETS)
     return basic
+
+
+def passt_asset(root: Path) -> ModelCache:
+    return ModelCache(root / "recognition" / "passt", PASST_OPENMIC)
 
 
 def subroformer_assets(root: Path, tuned: bool = False) -> tuple[ModelCache, ModelCache]:

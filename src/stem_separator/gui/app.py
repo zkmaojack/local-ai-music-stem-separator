@@ -1,5 +1,5 @@
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import sys
 from tempfile import gettempdir
@@ -11,27 +11,29 @@ from PySide6.QtCore import QLibraryInfo, QSettings, QStandardPaths, Qt, QTimer, 
 from PySide6.QtGui import QBrush, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QBoxLayout, QCheckBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QMainWindow, QProgressBar, QScrollArea, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
+    QMainWindow, QScrollArea, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from stem_separator.audio.playback import Preview, load_preview
-from stem_separator.application.instruments import FOUR_STEM_TARGETS, LABELS, REMAINDER, validate_model_selection
+from stem_separator.application.instruments import LABELS, REMAINDER, validate_model_selection
+from stem_separator.application.planning import AutomaticPlan, plan_automatic
+from stem_separator.application.stem_validation import quiet_unconfirmed_stems
 from stem_separator.application.types import MODEL_LABELS, QUALITY_LABELS, ModelChoice, Quality, SeparationError
 from stem_separator.gui.audio_cache import AudioCache
 from stem_separator.gui.controls import StatusLamp, time_text
 from stem_separator.gui.hardware import HardwareButton
 from stem_separator.gui.instrument_menu import InstrumentMenu
-from stem_separator.gui.jobs import BackgroundTask, SeparationJob
-from stem_separator.gui.processing import PROGRESS_STAGES, STAGES, SignalDecomposition, Stage
+from stem_separator.gui.jobs import BackgroundTask, SeparationJob, TaskSignals
+from stem_separator.gui.processing import PROGRESS_STAGES, STAGES, ProcessingPanel, Stage
 from stem_separator.gui.results import Results
 from stem_separator.gui.song_setup import SongSetup, SongSetupDialog
-from stem_separator.gui.surfaces import DeviceDialog, DeviceFileDialog, DeviceMenu, DeviceStyle
+from stem_separator.gui.surfaces import DeviceDialog, DeviceMenu, DeviceStyle, HardwarePanel
 from stem_separator.gui.theme import (
     ACCENT, ERROR, SPACE, STATUS_GREEN, STATUS_IDLE, STYLE, app_icon, interface_font, matte_tile,
     silver_palette, technical_font,
 )
 from stem_separator.storage.export import copy_stems
-from stem_separator.storage.model_cache import assets_for_targets, recognition_assets
+from stem_separator.storage.model_cache import assets_for_targets
 
 FORMATS = (".wav", ".mp3", ".flac", ".m4a", ".ogg")
 
@@ -51,6 +53,7 @@ class PreviousResult:
     notice: str
     notice_error: bool
     resume: bool
+    plan: AutomaticPlan | None
 
 
 class MainWindow(QMainWindow):
@@ -80,10 +83,13 @@ class MainWindow(QMainWindow):
         self.result_quality: Quality | None = None
         self.recognized = False
         self.manual_targets = False
+        self.automatic_plan: AutomaticPlan | None = None
         self.pending_setup: SongSetup | None = None
         self.previous: PreviousResult | None = None
         self.choosing_song = False
         self.preview_cancel = Event()
+        self.export_cancel = Event()
+        self.export_resume = False
         QSettings("Local Stem Separator", "Preferences").remove("display/reducedMotion")
         self.processing_stage = Stage.IDLE
         self.uncertain_targets: tuple[str, ...] = ()
@@ -142,7 +148,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(workspace)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
-        header = QFrame(objectName="songPanel")
+        header = HardwarePanel(objectName="songPanel")
         self.header_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, header)
         self.header_layout.setContentsMargins(14, 12, 14, 12)
         self.header_layout.setSpacing(12)
@@ -189,38 +195,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(header)
 
         self.content = QStackedWidget()
-        panel = QFrame(objectName="well")
-        state = QVBoxLayout(panel)
-        state.setContentsMargins(6 * SPACE, 4 * SPACE, 6 * SPACE, 4 * SPACE)
-        state.setSpacing(2 * SPACE)
-        state.addStretch(1)
-        self.state_title = QLabel("准备分离", objectName="stateTitle", alignment=Qt.AlignmentFlag.AlignCenter)
-        self.state_detail = QLabel("人声、鼓、贝斯和其他", objectName="muted",
-                                   alignment=Qt.AlignmentFlag.AlignCenter, wordWrap=True)
-        self.progress = QProgressBar(textVisible=False)
-        self.progress.setFixedWidth(310)
-        self.progress.setAccessibleName("分离进度")
-        self.signal_display = SignalDecomposition()
-        self.signal_caption = QLabel("信号分解示意 · 依据原始音频", objectName="muted", alignment=Qt.AlignmentFlag.AlignCenter)
-        self.signal_caption.setFont(technical_font(11))
-        self.processing_model = QLabel(objectName="muted", alignment=Qt.AlignmentFlag.AlignCenter)
-        self.processing_model.setFont(technical_font(12))
-        self.signal_caption.hide()
-        self.processing_model.hide()
-        self.cancel = HardwareButton("取消", width=88)
+        self.processing_panel = panel = ProcessingPanel()
+        self.state_title = panel.title
+        self.state_detail = panel.detail
+        self.progress = panel.progress
+        self.processing_model = panel.model
+        self.cancel = panel.cancel
         self.cancel.clicked.connect(self._cancel)
-        state.addWidget(self.state_title)
-        state.addWidget(self.signal_display, 3)
-        state.addWidget(self.signal_caption)
-        state.addWidget(self.processing_model)
-        state.addWidget(self.state_detail)
-        state.addWidget(self.progress, alignment=Qt.AlignmentFlag.AlignHCenter)
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        buttons.addWidget(self.cancel)
-        buttons.addStretch()
-        state.addLayout(buttons)
-        state.addStretch(1)
         self.results = Results()
         self.results.audio_error.connect(lambda detail: self._show_notice(f"无法播放，请检查系统音频输出。{detail}"))
         self.content.addWidget(panel)
@@ -233,23 +214,27 @@ class MainWindow(QMainWindow):
         self.content.setCurrentIndex(0)
         self.state_title.setText(title)
         self.state_detail.setText(detail)
+        self.processing_panel.set_filename(self.source.name if self.source else "")
         self.progress.hide()
+        self.processing_panel.percentage.hide()
         self.cancel.setVisible(cancellable)
         self.cancel.setEnabled(cancellable)
 
     def _show_stage(self, stage: Stage) -> None:
-        if stage == self.processing_stage:
-            return
+        changed = stage != self.processing_stage
         self.processing_stage = stage
-        self.signal_display.set_stage(stage)
         active = stage in STAGES
-        self.signal_caption.setVisible(active)
         self.processing_model.setVisible(active)
-        if active:
+        self.processing_panel.device.setVisible(active)
+        if active and changed:
             self.state_title.setText(STAGES[stage])
-            split = stage in (Stage.SEPARATING, Stage.FINALIZING)
-            self.signal_caption.setText("基于原始音频的分轨示意" if split else "信号分解示意 · 依据原始音频")
+            if self.source:
+                self.processing_panel.set_filename(self.source.name)
+            self.processing_panel.set_progress()
+            self.progress_started = 0.
+        elif not active:
             self.progress.hide()
+            self.processing_panel.percentage.hide()
 
     def _show_notice(self, message: str = "", *, error: bool = True) -> None:
         self.notice.setProperty("severity", "error" if error else "info")
@@ -302,14 +287,13 @@ class MainWindow(QMainWindow):
                 self._cancel()
             return
         self._retain_result()
-        self.signal_display.reset_signal()
-        self.processing_model.clear()
         self._show_notice()
         self.source = setup.source
         self.quality, self.model = setup.quality, setup.model
         self._render_config()
         self.recognized = False
         self.manual_targets = setup.targets is not None
+        self.automatic_plan = None
         self.uncertain_targets = ()
         self.targets = setup.targets or ()
         self._update_selection_button()
@@ -335,7 +319,9 @@ class MainWindow(QMainWindow):
             # Leave room for the song name, format and status before the controls wrap.
             one_row = event.size().width() >= self.header_actions.sizeHint().width() + 390
             direction = QBoxLayout.Direction.LeftToRight if one_row else QBoxLayout.Direction.TopToBottom
-            self.header_layout.setDirection(direction)
+            if direction != self.header_layout.direction():
+                self.header_layout.setDirection(direction)
+                self.workspace.layout().activate()
         QTimer.singleShot(0, self._fit_song_name)
 
     @Slot()
@@ -352,9 +338,8 @@ class MainWindow(QMainWindow):
             self._prepare_separation()
 
     def _start_recognition(self) -> None:
-        if self._models_present(recognition_assets(self.model_dir, "fast")):
-            self._retain_result()
-            self._start_job("recognize", self.source)
+        self._retain_result()
+        self._start_job("recognize", self.source)
 
     def _models_present(self, assets) -> bool:
         missing = [asset.path for asset in assets if not asset.path.is_file()]
@@ -394,6 +379,9 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
 
     def _prepare_separation(self) -> None:
+        if not self.manual_targets and self.automatic_plan:
+            self.start_separation()
+            return
         try:
             validate_model_selection(self.targets, self.model)
         except SeparationError as error:
@@ -455,6 +443,7 @@ class MainWindow(QMainWindow):
             self._show_notice(str(error))
             return
         self.manual_targets = True
+        self.automatic_plan = None
         self.targets = targets
         self._update_selection_button()
         self.primary.setText("保存音轨" if self.paths and (targets, self.quality) == (self.result_targets, self.result_quality)
@@ -468,6 +457,9 @@ class MainWindow(QMainWindow):
         self.instruments.setToolTip(self._selection_detail())
 
     def _selection_detail(self) -> str:
+        if not self.manual_targets and self.automatic_plan:
+            candidates = "、".join(LABELS[name] for name in self.automatic_plan.recognized)
+            return f"识别候选：{candidates}" if candidates else "识别未得出可靠结果，使用常用声部分离。"
         if not self.targets:
             return "人声、鼓、贝斯和其他"
         if self.targets == (REMAINDER,):
@@ -485,9 +477,11 @@ class MainWindow(QMainWindow):
             self._show_notice(f"无法创建临时目录。{error}")
             return
         selection = "manual" if self.manual_targets else "automatic"
-        self._start_job("separate", self.source, self.session.path, selection, self.model, *self.targets)
+        plan = self.automatic_plan if not self.manual_targets else None
+        self._start_job("separate", self.source, self.session.path, selection,
+                        plan.model if plan else self.model, *self.targets, job_quality=plan.quality if plan else None)
 
-    def _start_job(self, phase: str, *paths: Path | str) -> None:
+    def _start_job(self, phase: str, *paths: Path | str, job_quality: Quality | None = None) -> None:
         self.phase = phase
         self.job_error = ""
         self.job_result = None
@@ -501,8 +495,11 @@ class MainWindow(QMainWindow):
             self._status("音频准备", "识别完成后会自动分离。", cancellable=True)
         else:
             self._status("音频准备", "正在启动本地处理…", cancellable=True)
+        self.processing_model.setText("模型 · 等待后台确认")
+        self.processing_panel.device.setText("设备 · 等待后台确认")
         self._show_stage(Stage.PREPARING)
-        self.job.start(phase, self.model_dir, self.quality, *paths)
+        self.processing_panel.set_progress()
+        self.job.start(phase, self.model_dir, job_quality or self.quality, *paths)
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
@@ -523,31 +520,26 @@ class MainWindow(QMainWindow):
             stage = event["stage"]
             if duration := event.get("duration"):
                 self.metadata.setText(f"{self.source.suffix[1:].upper()} · {time_text(round(duration))}")
-            if signal := event.get("signal"):
-                self.signal_display.set_signal(signal)
-            if model := event.get("model"):
-                engine = event.get("device")
-                self.processing_model.setText(f"{model} · {engine}" if engine else model)
+            model = event.get("model")
+            device = event.get("device")
+            if model:
+                if self.processing_model.text() != f"模型 · {model}" and not device:
+                    self.processing_panel.device.setText("设备 · 等待后台确认")
+                self.processing_model.setText(f"模型 · {model}")
+            if device:
+                self.processing_panel.device.setText(f"设备 · {device}")
             if stage in PROGRESS_STAGES:
                 self._show_stage(PROGRESS_STAGES[stage])
+            done, total = event.get("completed"), event.get("total")
+            self.processing_panel.set_progress(done, total)
             detail = {"decode": "正在读取本地音频…", "load": "正在加载本地模型…",
                       "export": "正在生成试听文件…", "postprocess": "正在对齐和检查音轨…"}
-            if stage in ("inference", "analysis"):
-                done, total = event.get("completed"), event.get("total")
-                device = "GPU" if event["message"].startswith("CUDA") else "CPU"
-                title = f"{device} 处理中" if stage == "inference" else event["message"].rstrip("…")
-                known = done is not None and bool(total)
-                self.progress.setVisible(known)
-                if not known:
-                    self.state_detail.setText(f"{title}…" if stage == "inference" else event["message"])
-                    return
-                self.progress.setRange(0, total)
-                self.progress.setValue(done)
-                eta = self._estimate_remaining(done, total) if stage == "inference" else ""
-                self.state_detail.setText(f"{title} · {round(100 * done / total)}%{eta}")
+            if stage == "inference":
+                eta = self._estimate_remaining(done, total) if done is not None and total else ""
+                self.state_detail.setText(f"正在处理音频片段{eta}")
             elif stage == "device":
-                self.progress.hide()
                 self.progress_started = 0.
+                self.processing_panel.device.setText("设备 · 正在调整，等待后台确认")
                 self.state_detail.setText("显存不足，正在调整处理方式…")
             else:
                 message = event["message"]
@@ -571,6 +563,8 @@ class MainWindow(QMainWindow):
         self.state_detail.setText("正在取消…")
         if self.phase == "preview":
             self.preview_cancel.set()
+        elif self.phase == "save":
+            self.export_cancel.set()
         else:
             self.job.cancel()
 
@@ -587,20 +581,33 @@ class MainWindow(QMainWindow):
             return
         if self.phase == "recognize" and ok and self.job_result is not None:
             result = self.job_result
-            self.recognized = True
-            targets = tuple(result["targets"])
-            if self.model in ("demucs", "subroformer"):
-                targets = tuple(track for track in targets if track in FOUR_STEM_TARGETS)
-            self.targets = targets or (REMAINDER,)
-            self.uncertain_targets = tuple(result.get("uncertain", ()))
-            self._update_selection_button()
             self._set_busy(False)
+            try:
+                if not result.get("has_audio", True):
+                    raise SeparationError("音频接近静音，没有可分离的声音。")
+                plan = plan_automatic(self.model_dir, self.quality, self.model, tuple(result["targets"]))
+            except SeparationError as error:
+                self._show_stage(Stage.FAILED)
+                if not self._restore_result():
+                    self._engine_status("无法分离", ERROR)
+                    self._status("无法分离", str(error))
+                else:
+                    self._show_notice(str(error))
+                return
+            self.automatic_plan = plan
+            if warning := result.get("warning"):
+                self.automatic_plan = replace(plan, notice=f"{warning} {plan.notice}")
+            self.recognized = True
+            self.targets = plan.targets
+            self.uncertain_targets = tuple(dict.fromkeys((*result.get("uncertain", ()), *plan.unresolved)))
+            self._update_selection_button()
             self._prepare_separation()
             return
         if self.phase == "separate" and ok and self.job_result:
             self.phase = "preview"
             self.preview_cancel.clear()
             self._show_stage(Stage.FINALIZING)
+            self.processing_panel.set_progress()
             self.state_detail.setText("正在生成波形与试听缓存…")
             self.paths = {name: Path(self.job_result["paths"][name]) for name in self.job_result["tracks"]}
             self.result_targets = self.targets
@@ -610,6 +617,8 @@ class MainWindow(QMainWindow):
             BackgroundTask(lambda: load_preview(files, cache, check_cancel=self._check_preview_cancel)).start(
                 self._preview_loaded
             )
+            return
+        if self.phase == "separate" and not self.job.cancelled and self._retry_automatic_route():
             return
         self._set_busy(False)
         self._show_stage(Stage.CANCELLED if self.job.cancelled else Stage.FAILED)
@@ -624,6 +633,22 @@ class MainWindow(QMainWindow):
                 self._model_error("本地模型校验失败", "请替换损坏的模型文件后重试。", detail, preserve_view=restored)
             else:
                 self._show_notice(f"处理失败。{detail[-400:]}" if detail else "处理失败，请重试。")
+
+    def _retry_automatic_route(self) -> bool:
+        plan = self.automatic_plan
+        if plan is None or self.manual_targets or self.model != "auto":
+            return False
+        try:
+            next_plan = plan_automatic(self.model_dir, self.quality, self.model, plan.recognized,
+                                       attempted=(*plan.attempted, (plan.model, plan.quality)))
+        except SeparationError:
+            return False
+        self._clear_candidate()
+        self._set_busy(False)
+        self.automatic_plan = replace(next_plan, notice=f"首选模型运行失败，已尝试备用模型。{next_plan.notice}")
+        self.targets = next_plan.targets
+        self.start_separation()
+        return True
 
     @Slot(object, str)
     def _preview_loaded(self, preview: Preview | None, error: str) -> None:
@@ -656,10 +681,21 @@ class MainWindow(QMainWindow):
             self._show_notice(f"无法准备试听。{error}")
             return
         self.results.set_preview(preview, tuple(self.paths))
+        hidden = ()
+        if self.automatic_plan and self.job_result:
+            hidden = tuple(track for track in quiet_unconfirmed_stems(
+                self.job_result.get("diagnostics", {}), self.automatic_plan.recognized) if track in self.paths)
+            if len(hidden) < len(self.paths):
+                for track in hidden:
+                    self.results.set_track_visible(track, False)
         self.tracks.setEnabled(True)
         self.metadata.setText(f"{self.source.suffix[1:].upper()} · {time_text(round(preview.duration))}")
         self.content.setCurrentWidget(self.results)
-        notice = ""
+        notice = self.automatic_plan.notice if self.automatic_plan else ""
+        if self.job_result and self.job_result.get("validation_notice"):
+            notice += self.job_result["validation_notice"]
+        if hidden and len(hidden) < len(self.paths):
+            notice += f"{len(hidden)} 条较弱的音轨已折叠，可在「音轨」菜单中显示。"
         if self.uncertain_targets:
             notice += f"「选择乐器」中有 {len(self.uncertain_targets)} 项待确认。"
         if tuple(self.paths) == (REMAINDER,):
@@ -684,7 +720,7 @@ class MainWindow(QMainWindow):
         self.previous = PreviousResult(setup, self.session, self.paths, self.result_targets, self.result_quality,
                                        self.recognized, self.manual_targets, self.uncertain_targets,
                                        self.metadata.text(), self.primary.text(), self.notice.text(),
-                                       self.notice.property("severity") == "error", playing)
+                                       self.notice.property("severity") == "error", playing, self.automatic_plan)
         self.session, self.paths = None, {}
 
     def _clear_candidate(self) -> None:
@@ -704,6 +740,7 @@ class MainWindow(QMainWindow):
         self.targets = previous.setup.targets or ()
         self.result_targets, self.result_quality = previous.result_targets, previous.result_quality
         self.recognized, self.manual_targets = previous.selection_recognized, previous.manual
+        self.automatic_plan = previous.plan
         self.uncertain_targets = previous.uncertain
         self.session, self.paths = previous.cache, previous.paths
         self._render_config()
@@ -768,13 +805,8 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
         if not selected:
             return
-        picker = DeviceFileDialog(self, "保存音轨到文件夹", str(self.source.parent))
-        picker.setFileMode(QFileDialog.FileMode.Directory)
-        picker.setOption(QFileDialog.Option.ShowDirsOnly)
-        accepted = picker.exec() == QDialog.DialogCode.Accepted
-        folder = picker.selectedFiles()[0] if accepted else ""
-        picker.deleteLater()
-        if not accepted or not folder:
+        folder = QFileDialog.getExistingDirectory(self, "保存音轨到文件夹", str(self.source.parent))
+        if not folder:
             return
         root = Path(folder).resolve()
         if root.is_relative_to(self.cache_root.resolve()):
@@ -788,12 +820,47 @@ class MainWindow(QMainWindow):
         self._show_notice("正在保存音轨…", error=False)
         self.phase = "save"
         self._set_busy(True)
-        BackgroundTask(lambda: copy_stems(destination, selected)).start(self._saved)
+        self.export_cancel.clear()
+        self.export_resume = bool(self.results.player and self.results.player.playing)
+        if self.export_resume:
+            self.results.toggle_play()
+        self._status("正在保存音轨", "正在写入所选文件夹…", cancellable=True)
+        self._show_stage(Stage.FINALIZING)
+        self.state_title.setText("正在保存音轨")
+        self.processing_model.setText("模型 · 已完成分离")
+        self.processing_panel.device.setText("设备 · 本地磁盘")
+        self.processing_panel.set_progress()
+        signals = TaskSignals()
+        task = BackgroundTask(lambda: copy_stems(
+            destination, selected, check_cancel=self._check_export_cancel,
+            progress=signals.progress.emit), signals=signals)
+        signals.progress.connect(self._export_progress)
+        task.start(self._saved)
+
+    def _check_export_cancel(self) -> None:
+        if self.export_cancel.is_set():
+            raise InterruptedError("保存已取消")
+
+    @Slot(object, object)
+    def _export_progress(self, done: int, total: int) -> None:
+        if self.phase == "save" and not self.export_cancel.is_set():
+            self.processing_panel.set_progress(done, total)
 
     @Slot(object, str)
     def _saved(self, destination: Path | None, error: str) -> None:
         self._set_busy(False)
-        self._show_notice(f"无法保存音轨。{error}" if error else f"已保存到 {destination}", error=bool(error))
+        self.phase = ""
+        cancelled = destination is None and self.export_cancel.is_set()
+        self._show_stage(Stage.CANCELLED if cancelled else Stage.FAILED if error else Stage.COMPLETED)
+        if self.results.player:
+            self.content.setCurrentWidget(self.results)
+            if self.export_resume and not self.close_pending:
+                self.results.toggle_play()
+        else:
+            self._status("分离完成", "可以保存音轨。")
+        self._show_notice("保存已取消，试听音轨仍保留。" if cancelled else
+                          f"无法保存音轨。{error}" if error else f"已保存到 {destination}",
+                          error=bool(error) and not cancelled)
         if self.close_pending:
             self.close()
 

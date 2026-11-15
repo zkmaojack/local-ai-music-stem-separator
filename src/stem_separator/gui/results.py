@@ -11,7 +11,7 @@ from stem_separator.gui.controls import (
     ChannelSlider, Timeline, TimelineHover, TrackName, Waveform, plot_fraction, time_text,
 )
 from stem_separator.gui.hardware import HardwareButton
-from stem_separator.gui.surfaces import DeviceMenu
+from stem_separator.gui.surfaces import DeviceMenu, HardwarePanel
 from stem_separator.gui.theme import SPACE, STEM_TONES, TRACK_KEY_SIZE, WAVEFORM, technical_font
 
 SEEK_STEPS = 1_000_000
@@ -54,8 +54,13 @@ class Results(QWidget):
         self._hover_pointer: QPointF | None = None
         self.display.viewport().installEventFilter(self)
         self.display.verticalScrollBar().valueChanged.connect(self._reposition_hover)
-        layout.addWidget(self.display, 1)
-        self.deck = QFrame(objectName="deck")
+        bezel = HardwarePanel(recessed=True)
+        screen_layout = QVBoxLayout(bezel)
+        screen_layout.setContentsMargins(7, 7, 7, 7)
+        screen_layout.setSpacing(0)
+        screen_layout.addWidget(self.display)
+        layout.addWidget(bezel, 1)
+        self.deck = HardwarePanel(objectName="deck")
         transport = QHBoxLayout(self.deck)
         transport.setContentsMargins(3 * SPACE, 2 * SPACE, 4 * SPACE, 2 * SPACE)
         transport.setSpacing(2 * SPACE)
@@ -279,7 +284,15 @@ class Results(QWidget):
         self._apply_mix()
         self.timeline.update()
         self._refresh()
-        self.timer.start()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if hasattr(self, "timer"):
+            self._refresh()
+
+    def hideEvent(self, event) -> None:
+        self.timer.stop()
+        super().hideEvent(event)
 
     def clear(self) -> None:
         self.timer.stop()
@@ -389,6 +402,11 @@ class Results(QWidget):
         if not self.player:
             return
         playing = self.player.playing
+        if playing and self.isVisible():
+            if not self.timer.isActive():
+                self.timer.start()
+        else:
+            self.timer.stop()
         glyph = "pause" if playing else "play"
         if self.play_key.glyph != glyph or not self.play_key.accessibleName():
             self.play_key.glyph = glyph

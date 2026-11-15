@@ -82,13 +82,14 @@ class SeparationJob(QObject):
 
 class TaskSignals(QObject):
     done = Signal(object, str)
+    progress = Signal(object, object)
 
 
 class BackgroundTask(QRunnable):
-    def __init__(self, work: Callable[[], object]) -> None:
+    def __init__(self, work: Callable[[], object], signals: TaskSignals | None = None) -> None:
         super().__init__()
         self.work = work
-        self.signals = TaskSignals()
+        self.signals = signals if signals is not None else TaskSignals()
 
     def run(self) -> None:
         try:

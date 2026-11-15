@@ -24,7 +24,6 @@ class Progress:
     completed: int | None = None
     total: int | None = None
     model: str | None = None
-    signal: dict[str, list[float]] | None = None
     duration: float | None = None
     device: str | None = None
 
@@ -51,3 +50,5 @@ class SeparationResult:
     cuda_peak_allocated_bytes: int | None
     cuda_peak_reserved_bytes: int | None
     export_gain: float
+    diagnostics: dict[str, dict] | None = None
+    validation_notice: str = ""

@@ -39,6 +39,7 @@ stem-separator-gui = "stem_separator.gui.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+"stem_separator.backends" = ["LICENSE-passt.txt"]
 "stem_separator.backends.roformer" = ["LICENSE"]
 "stem_separator.backends.audiosep" = ["LICENSE"]
 "stem_separator.backends.subroformer_vendor" = ["LICENSE"]

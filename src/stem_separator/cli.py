@@ -6,7 +6,7 @@ from typing import cast
 
 from stem_separator.application.instruments import INSTRUMENTS
 from stem_separator.application.types import Device, Progress, SeparationError
-from stem_separator.storage.model_cache import ModelCache, effect_assets, model_assets, recognition_assets
+from stem_separator.storage.model_cache import ModelCache, effect_assets, model_assets, passt_asset, recognition_assets
 
 LOGGER = logging.getLogger("stem_separator")
 MIB = 1024**2
@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--instruments", action="store_true", help="Set up the extended instrument model")
     setup.add_argument("--effects", action="store_true", help="Set up the electronic effects model")
     setup.add_argument("--recognition", action="store_true", help="Set up YAMNet and CLAP for offline recognition")
+    setup.add_argument("--passt", action="store_true", help="Set up the optional PaSST OpenMIC candidate model")
     setup.add_argument("--all", action="store_true", help="Prepare the complete offline model cache")
     commands.add_parser("list-instruments", help="List instrument IDs for --instrument")
     commands.add_parser("doctor", help="Check FFmpeg, CUDA computation, and the local checkpoint")
@@ -37,13 +38,16 @@ def main(argv: list[str] | None = None) -> int:
     cache = ModelCache(args.model_dir)
     try:
         if args.command == "setup-model":
-            assets = model_assets(args.model_dir, False) if args.all or not (args.instruments or args.effects or args.recognition) else ()
+            selected = args.instruments or args.effects or args.recognition or args.passt
+            assets = model_assets(args.model_dir, False) if args.all or not selected else ()
             if args.all or args.instruments:
                 assets += model_assets(args.model_dir, True)
             if args.all or args.effects:
                 assets += effect_assets(args.model_dir)
             if args.all or args.recognition:
                 assets += recognition_assets(args.model_dir, "high")
+            if args.passt:
+                assets += (passt_asset(args.model_dir),)
             if args.all:
                 from stem_separator.storage.model_cache import subroformer_assets
 

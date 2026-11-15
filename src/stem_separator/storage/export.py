@@ -1,7 +1,6 @@
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from shutil import copyfile
 from tempfile import TemporaryDirectory
 
 import numpy as np
@@ -28,14 +27,37 @@ def _stage_export(destination: Path) -> Iterator[Path]:
             staging.mkdir()
             yield staging
             staging.rename(destination)
+    except InterruptedError:
+        raise
     except (OSError, sf.SoundFileError) as error:
         raise SeparationError(f"Could not export to {destination}: {error}") from error
 
 
-def copy_stems(destination: Path, selected: list[Path]) -> Path:
+def copy_stems(destination: Path, selected: list[Path], *,
+               progress: Callable[[int, int], None] | None = None,
+               check_cancel: Callable[[], None] | None = None) -> Path:
+    total = sum(path.stat().st_size for path in selected)
+    done = 0
+    last_percent = 0
     with _stage_export(destination) as staging:
+        if progress is not None:
+            progress(0, total)
         for path in selected:
-            copyfile(path, staging / path.name)
+            with path.open("rb") as source, (staging / path.name).open("wb") as output:
+                while True:
+                    if check_cancel is not None:
+                        check_cancel()
+                    block = source.read(4 * 1024 * 1024)
+                    if not block:
+                        break
+                    output.write(block)
+                    done += len(block)
+                    percent = done * 100 // max(1, total)
+                    if progress is not None and percent != last_percent:
+                        progress(done, total)
+                        last_percent = percent
+        if check_cancel is not None:
+            check_cancel()
     return destination
 
 

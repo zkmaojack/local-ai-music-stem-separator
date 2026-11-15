@@ -125,9 +125,9 @@ class DemucsBackend:
         def on_chunk(_module: HTDemucs, _args: tuple[torch.Tensor, ...], _output: torch.Tensor) -> None:
             nonlocal completed
             completed += 1
-            progress(Progress("inference", label, completed, total))
+            progress(Progress("inference", label, completed, total, model="Demucs / htdemucs", device=label))
 
-        progress(Progress("inference", label, 0, total))
+        progress(Progress("inference", label, 0, total, model="Demucs / htdemucs", device=label))
         hook = model.register_forward_hook(on_chunk)
         try:
             # A CPU input keeps the full-length output and overlap buffers in system RAM.

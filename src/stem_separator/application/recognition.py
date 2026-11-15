@@ -5,10 +5,10 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from stem_separator.application.instruments import GROUPS, INSTRUMENTS
+from stem_separator.application.instruments import GROUPS, HEAD_IDS, INSTRUMENTS
 from stem_separator.application.types import Progress, ProgressCallback, Quality, SeparationError
-from stem_separator.audio.decode import decode_audio, signal_profile
-from stem_separator.storage.model_cache import ModelCache, recognition_assets
+from stem_separator.audio.decode import decode_audio, has_signal
+from stem_separator.storage.model_cache import ModelCache, passt_asset, recognition_assets
 
 # Indices in the official YAMNet AudioSet class map, with per-track score thresholds.
 TAG_CLASSES = {
@@ -55,6 +55,42 @@ FAMILY_PROMPTS = {
 class RecognitionResult:
     tracks: tuple[str, ...]
     uncertain: tuple[str, ...]
+    has_audio: bool = True
+    warning: str = ""
+    evidence: tuple["Evidence", ...] = ()
+
+
+@dataclass(frozen=True)
+class Evidence:
+    label: str
+    model: str
+    start: float
+    end: float
+    score: float
+
+
+def recognize_passt(source: Path, model_dir: Path, quality: Quality, progress: ProgressCallback,
+                    check_cancel: Callable[[], None], *, device: str = "auto") -> RecognitionResult:
+    from stem_separator.backends.passt_openmic import CLASSES, RATE, predict
+
+    progress(Progress("decode", "正在读取乐器识别用音频…"))
+    audio = decode_audio(source, RATE, 1, check_cancel=check_cancel)[0]
+    limit = {"fast": 6, "balanced": 18, "high": 48}[quality]
+    segments = predict(audio, passt_asset(model_dir), progress, check_cancel, limit=limit, device_name=device)
+    evidence = tuple(Evidence(label, "PaSST/OpenMIC", start, end, float(score))
+                     for start, end, scores in segments for label, score in zip(CLASSES, scores, strict=True))
+    confirmed, tentative = {}, []
+    for index, label in enumerate(CLASSES):
+        scores = [float(scores[index]) for _, _, scores in segments]
+        if not scores:
+            break
+        strongest = max(scores)
+        # One strong window can preserve a late entrance. Benchmarks tune the score cutoff.
+        if label in HEAD_IDS and (strongest >= .70 or sum(score >= .48 for score in scores) >= 2):
+            confirmed[label] = strongest
+        elif label in HEAD_IDS and strongest >= .30:
+            tentative.append(label)
+    return RecognitionResult(non_overlapping_targets(confirmed), tuple(tentative), has_signal(audio), evidence=evidence)
 
 
 def non_overlapping_targets(scores: dict[str, float]) -> tuple[str, ...]:
@@ -82,13 +118,39 @@ def classify_yamnet(patches: NDArray[np.float32]) -> dict[str, float]:
 
 
 def recognize(source: Path, model_dir: Path, quality: Quality,
-              progress: ProgressCallback, check_cancel: Callable[[], None]) -> RecognitionResult:
+              progress: ProgressCallback, check_cancel: Callable[[], None], *,
+              use_passt: bool = False) -> RecognitionResult:
+    rate = 16000
+    progress(Progress("decode", "正在读取音频…"))
+    stereo = decode_audio(source, rate, 2, check_cancel=check_cancel)
+    if not has_signal(stereo):
+        return RecognitionResult((), (), has_audio=False)
+    # Use the louder side when a stereo fold would erase meaningful audio.
+    audio = stereo.mean(axis=0)
+    if not has_signal(audio):
+        audio = stereo[np.unravel_index(np.abs(stereo).argmax(), stereo.shape)[0]]
+    try:
+        result = recognize_audio(source, audio, model_dir, quality, progress, check_cancel)
+    except (SeparationError, ImportError, OSError, RuntimeError, ValueError) as error:
+        result = RecognitionResult((), (), warning=f"本地识别模型不可用。{error}")
+    if use_passt and passt_asset(model_dir).path.is_file():
+        try:
+            enhanced = recognize_passt(source, model_dir, quality, progress, check_cancel)
+            # Held-out evaluation did not justify promoting PaSST-only labels to confirmed.
+            uncertain = tuple(dict.fromkeys(name for name in (*result.uncertain, *enhanced.tracks, *enhanced.uncertain)
+                                            if name not in result.tracks))
+            return RecognitionResult(result.tracks, uncertain, warning=result.warning,
+                                     evidence=result.evidence + enhanced.evidence)
+        except (SeparationError, ImportError, OSError, RuntimeError, ValueError) as error:
+            result.warning += f" PaSST 复核不可用。{error}"
+    return result
+
+
+def recognize_audio(source, audio, model_dir, quality, progress, check_cancel) -> RecognitionResult:
     from ai_edge_litert.interpreter import Interpreter
 
     rate = 16000
-    progress(Progress("decode", "正在读取音频…"))
-    audio = decode_audio(source, rate, 1, check_cancel=check_cancel)[0]
-    progress(Progress("analysis", "正在识别乐器和声部…", model="YAMNet", signal=signal_profile(audio, rate),
+    progress(Progress("load", "正在加载乐器识别模型…", model="YAMNet",
                       duration=len(audio) / rate, device="CPU"))
     assets = recognition_assets(model_dir, quality)
     with assets[0].open_checkpoint() as checkpoint:
@@ -99,16 +161,17 @@ def recognize(source: Path, model_dir: Path, quality: Quality,
     width = int(inp["shape"][0])
     count = max(1, 1 + (len(audio) - width) // (rate // 2))
     offsets = np.unique(np.linspace(0, max(0, len(audio) - width), min(count, 600), dtype=np.int64))
-    patches = []
+    patches, scanned = [], []
     for index, offset in enumerate(offsets):
         if index % 16 == 0:
             progress(Progress("analysis", "正在识别乐器和声部…", index, len(offsets)))
         window = audio[offset:offset + width]
-        if np.max(np.abs(window)) <= .0003:
+        if not has_signal(window):
             continue
         interpreter.set_tensor(inp["index"], np.pad(window, (0, width - len(window))))
         interpreter.invoke()
         patches.append(interpreter.get_tensor(out)[0])
+        scanned.append(offset)
     if not patches:
         return RecognitionResult((), ())
     values = np.asarray(patches)
@@ -124,24 +187,32 @@ def recognize(source: Path, model_dir: Path, quality: Quality,
                 families.add(track)
     clap = {}
     uncertain = ()
+    evidence = []
+    for track, (indices, _) in TAG_CLASSES.items():
+        scores = values[:, indices].max(axis=1)
+        for index in np.argsort(scores)[-3:]:
+            start = scanned[index]
+            evidence.append(Evidence(track, "YAMNet", start / rate, min(len(audio), start + width) / rate,
+                                     float(scores[index])))
     if quality != "fast":
         assets = recognition_assets(model_dir, "high")[1:]
         if all(asset.path.is_file() for asset in assets):
             try:
-                progress(Progress("analysis", "正在复核细分乐器与电子音效…", model="CLAP"))
-                clap, uncertain = refine_clap(
+                progress(Progress("load", "正在加载细分乐器复核模型…", model="CLAP"))
+                clap, uncertain, clap_evidence = refine_clap(
                     decode_audio(source, 48000, 1, check_cancel=check_cancel)[0], yamnet, families,
                     weak_tracks, assets, check_cancel, progress,
                 )
+                evidence.extend(clap_evidence)
             except (SeparationError, ImportError, OSError, RuntimeError, ValueError):
                 progress(Progress("analysis", "本地复核模型不可用，继续使用初步识别。", model="YAMNet", device="CPU"))
     tracks = non_overlapping_targets(yamnet | clap)
-    return RecognitionResult(tracks, tuple(name for name in uncertain if name not in tracks))
+    return RecognitionResult(tracks, tuple(name for name in uncertain if name not in tracks), evidence=tuple(evidence))
 
 
 def refine_clap(audio: NDArray[np.float32], yamnet: dict[str, float], families: set[str], weak_tracks: set[str],
                 assets: tuple[ModelCache, ...], check_cancel: Callable[[], None], progress: ProgressCallback,
-                ) -> tuple[dict[str, float], tuple[str, ...]]:
+                ) -> tuple[dict[str, float], tuple[str, ...], tuple[Evidence, ...]]:
     import torch
     from transformers import AutoTokenizer, ClapFeatureExtractor, ClapModel
 
@@ -178,7 +249,7 @@ def refine_clap(audio: NDArray[np.float32], yamnet: dict[str, float], families: 
     count = min(16, 1 + (end + width // 2 - 1) // (width // 2))
     offsets = np.unique(np.linspace(0, end, count, dtype=np.int64))
     similarities = []
-    device_label = "GPU" if device.type == "cuda" else "CPU"
+    device_label = "CUDA" if device.type == "cuda" else "CPU"
     message = "正在复核细分乐器与电子音效"
     with torch.inference_mode():
         check_cancel()
@@ -228,4 +299,8 @@ def refine_clap(audio: NDArray[np.float32], yamnet: dict[str, float], families: 
         floor = baseline[:, :2].max(axis=1)
         if np.count_nonzero((affinity >= .31) & (affinity - floor >= .03)) >= required:
             scores[family] = float(affinity.max())
-    return scores, tuple(uncertain)
+    evidence = tuple(Evidence(track, "LAION CLAP", offset / extractor.sampling_rate,
+                              min(len(audio), offset + width) / extractor.sampling_rate, float(values[index, column]))
+                     for track, column in prompt_indices.items() if ":" not in track
+                     for index, offset in enumerate(offsets) if values[index, column] >= .20)
+    return scores, tuple(uncertain), evidence

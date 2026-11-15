@@ -90,22 +90,14 @@ class FourStemEnsemble:
         self.tuned.unload()
 
     def separate(self, audio: Audio, device: Device, progress: ProgressCallback) -> InferenceResult:
-        def report(first: bool):
-            def update(event: Progress) -> None:
-                if event.stage == "inference" and event.total:
-                    fraction = 50 * (event.completed or 0) // event.total
-                    event = replace(event, completed=fraction + (0 if first else 50), total=100)
-                progress(event)
-            return update
-
         try:
-            a = self.base.separate(audio, device, report(True))
+            a = self.base.separate(audio, device, progress)
         finally:
             self.base.unload()
-        progress(Progress("load", "正在加载第二个分离模型…"))
+        progress(Progress("load", "正在加载第二个分离模型…", model=self.tuned.spec.name))
         self.tuned.load()
         try:
-            b = self.tuned.separate(audio, device, report(False))
+            b = self.tuned.separate(audio, device, progress)
         finally:
             self.tuned.unload()
         for stem in self.spec.stems:
@@ -134,17 +126,11 @@ class CombinedBackend:
         stems = {}
         for index, backend in enumerate(self.backends):
             if index:
-                progress(Progress("load", "正在加载音效模型…"))
+                progress(Progress("load", "正在加载音效模型…", model=backend.spec.name))
                 backend.load()
 
-            def report(event: Progress) -> None:
-                if event.total:
-                    done = index * 100 + (event.completed or 0) * 100 // event.total
-                    event = Progress(event.stage, event.message, done, len(self.backends) * 100)
-                progress(event)
-
             try:
-                result = backend.separate(audio, device, report)
+                result = backend.separate(audio, device, progress)
             finally:
                 backend.unload()
             results.append(result)

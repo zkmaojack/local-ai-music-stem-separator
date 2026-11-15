@@ -5,8 +5,9 @@ from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen,
 from PySide6.QtWidgets import QLabel, QSlider, QWidget
 
 from stem_separator.audio.playback import WaveformPeaks
+from stem_separator.gui.hardware import _surface
 from stem_separator.gui.theme import (
-    BUTTON_FACE, DISPLAY_TEXT, EDGE, INK, PLOT_CENTER, PLOT_CURSOR, PLOT_HOVER, SCREEN, SCREEN_EDGE,
+    BUTTON_FACE, DISPLAY_TEXT, EDGE, INK, KEY_PRIMARY, PLOT_CENTER, PLOT_CURSOR, PLOT_HOVER, SCREEN, SCREEN_EDGE,
     SELECTION, SOLO_LABEL, SOLO_TINT, STATUS_IDLE, TRACK_DIMMED, WAVEFORM, WAVEFORM_MUTED,
     technical_font,
 )
@@ -101,16 +102,22 @@ class ChannelSlider(QSlider):
         x = plot_x(self.fraction, self.width())
         right = plot_x(1, self.width())
         y = self.height() / 2
+        trough = QRectF(left, y - 4, right - left, 8)
+        rim = QLinearGradient(trough.topLeft(), trough.bottomLeft())
+        rim.setColorAt(0, QColor("#262a28"))
+        rim.setColorAt(1, QColor(BUTTON_FACE))
+        painter.setPen(QPen(rim, 1))
         painter.setBrush(QColor(SCREEN_EDGE))
-        painter.drawRoundedRect(QRectF(left, y - 3, right - left, 6), 2, 2)
+        painter.drawRoundedRect(trough, 3, 3)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(EDGE))
         painter.drawRoundedRect(QRectF(left, y - 2, x - left, 4), 1, 1)
-        painter.setBrush(QColor(EDGE if self.isSliderDown() else DISPLAY_TEXT))
-        painter.setPen(QPen(QColor(SELECTION), 1))
-        handle = QRectF(x - 5, y - 8, 10, 16)
-        painter.drawRoundedRect(handle, 2, 2)
-        painter.setPen(QPen(QColor(SELECTION), 1))
-        painter.drawLine(QPointF(x, y - 4), QPointF(x, y + 4))
+        handle = QRectF(x - 6, y - 10 + self.isSliderDown(), 12, 20)
+        painter.setBrush(QColor(30, 30, 25, 42))
+        painter.drawRoundedRect(handle.translated(1, 2).adjusted(-1, 0, 1, 1), 4, 4)
+        painter.setBrush(QColor(EDGE))
+        painter.drawRoundedRect(handle.translated(0, 1.5), 3, 3)
+        painter.drawPixmap(handle.topLeft(), _surface(12, 20, self.devicePixelRatioF(), 3, 2.5, KEY_PRIMARY, 25))
         if self.hasFocus():
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor(SELECTION), 1, Qt.PenStyle.DotLine))

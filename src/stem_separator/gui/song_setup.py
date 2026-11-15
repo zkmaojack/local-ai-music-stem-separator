@@ -12,7 +12,8 @@ from stem_separator.gui.hardware import HardwareButton
 from stem_separator.gui.instrument_menu import InstrumentMenu
 from stem_separator.gui.surfaces import DeviceDialog
 from stem_separator.gui.theme import INK, SPACE
-from stem_separator.storage.model_cache import assets_for_targets, recognition_assets
+from stem_separator.application.planning import plan_automatic
+from stem_separator.storage.model_cache import assets_for_targets
 
 
 @dataclass(frozen=True)
@@ -113,9 +114,9 @@ class SongSetupDialog(DeviceDialog):
             if manual and not self.targets:
                 raise SeparationError("请先选择乐器或音效。")
             if setup.targets is None:
-                assets = recognition_assets(self.model_dir, "fast")
-                if setup.model in ("demucs", "subroformer"):
-                    assets += assets_for_targets(self.model_dir, (), setup.quality, setup.model)
+                if setup.model != "detailed":
+                    plan_automatic(self.model_dir, setup.quality, setup.model, ())
+                assets = ()
             else:
                 validate_model_selection(setup.targets, setup.model)
                 assets = assets_for_targets(self.model_dir, setup.targets, setup.quality, setup.model)
@@ -126,6 +127,6 @@ class SongSetupDialog(DeviceDialog):
             message = str(error)
         self.confirm.setEnabled(not message)
         if not message and setup.targets is None and setup.model in ("demucs", "subroformer"):
-            message = "自动识别人声、鼓和贝斯，其他声音合并到剩余轨。"
+            message = "此模型分离人声、鼓、贝斯和其他。细分乐器识别结果可在菜单查看。"
         self.detail.setText(message)
         self.detail.setVisible(bool(message))

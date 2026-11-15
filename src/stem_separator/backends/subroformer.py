@@ -85,7 +85,7 @@ class SubRoformerBackend:
         cuda = device.type == "cuda"
         torch.set_num_threads(min(torch.get_num_threads(), 4))
         label = device_label(device)
-        progress(Progress("inference", label, 0, count))
+        progress(Progress("inference", label, 0, count, model=self.spec.name, device=label))
         with torch.inference_mode(), torch.autocast(device.type, dtype=torch.bfloat16, enabled=cuda and torch.cuda.is_bf16_supported()):
             for index in range(count):
                 start = index * step
@@ -97,7 +97,7 @@ class SubRoformerBackend:
                 taper = window[:length]
                 output[..., start:stop] += estimate * taper
                 weight[start:stop] += taper
-                progress(Progress("inference", label, index + 1, count))
+                progress(Progress("inference", label, index + 1, count, model=self.spec.name, device=label))
         np.divide(output, weight, out=output)
         stems = dict(zip(self.sources, output, strict=True))
         return {name: stems[name] for name in self.spec.stems}
